@@ -1,0 +1,89 @@
+[project]
+name = "kod"
+version = "0.1.0"
+description = "KOD - Konflux Offline Documentation - ETL pipeline and MCP server for Konflux docs RAG"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.1",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+kod = "kod:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kod"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.15",
+]
+
+[tool.coverage.run]
+branch = true
+data_file = "coverage/.data"
+source = [
+    "src",
+    "tests",
+]
+
+[tool.coverage.html]
+directory = "coverage/htmlcov"
+
+[tool.coverage.xml]
+output = "coverage/coverage.xml"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "-r", "a",
+    "--verbose",
+    "--strict-markers",
+    "--cov", "src",
+    "--cov", "tests",
+    "--cov-report", "html",
+    "--cov-report", "term-missing:skip-covered",
+    "--durations-min", "1",
+    "--durations", "10",
+    "--color", "yes",
+    "--showlocals",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "A",
+    "B",
+    "C4",
+    "E",
+    "F",
+    "I",
+    "RUF100",
+    "S",
+    "SIM",
+    "TID252",
+    "UP",
+    "W",
+]
+
+[tool.ruff.lint.isort]
+case-sensitive = false
+force-single-line = true
+lines-after-imports = 2
+lines-between-types = 1
+order-by-type = false
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S104"]

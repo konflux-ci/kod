@@ -1,0 +1,20 @@
+# KOD configuration file
+# Lists documentation sources for the ETL pipeline to extract, chunk, embed, and index.
+
+sources:
+  - name: konflux-ci-docs
+    url: https://github.com/konflux-ci/konflux-ci.dev.git
+    metadata:
+      product: Konflux
+
+  - name: konflux-ci-architecture
+    url: https://github.com/konflux-ci/architecture.git
+    metadata:
+      product: Konflux
+      topic: architecture
+
+  - name: konflux-homepage
+    url: https://konflux-ci.dev/
+    metadata:
+      product: Konflux
+      topic: overview

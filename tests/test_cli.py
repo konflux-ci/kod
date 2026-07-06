@@ -1,0 +1,83 @@
+"""Tests for KOD CLI subcommands."""
+
+import pytest
+
+from click.testing import CliRunner
+
+from kod.cli import cli
+
+
+@pytest.fixture()
+def runner():
+    return CliRunner()
+
+
+def test_help(runner):
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    assert "Konflux Offline Documentation" in result.output
+
+
+def test_version(runner):
+    result = runner.invoke(cli, ["--version"])
+    assert result.exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    ["extract", "transform", "embed", "index", "build-image", "serve", "pipeline"],
+)
+def test_subcommand_help(runner, cmd):
+    result = runner.invoke(cli, [cmd, "--help"])
+    assert result.exit_code == 0
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    ["extract", "transform", "embed", "index", "build-image", "pipeline"],
+)
+def test_subcommand_runs_with_config(runner, sample_config_yaml, cmd):
+    result = runner.invoke(cli, ["--config", sample_config_yaml, cmd])
+    assert result.exit_code == 0, f"Failed for '{cmd}': {result.output}"
+
+
+def test_serve_stub(runner, sample_config_yaml):
+    result = runner.invoke(cli, ["--config", sample_config_yaml, "serve"])
+    assert result.exit_code == 0
+
+
+def test_missing_config_fails(runner):
+    result = runner.invoke(cli, ["--config", "nonexistent.yaml", "extract"])
+    assert result.exit_code != 0
+
+
+def test_get_config_caches_result():
+    from unittest.mock import MagicMock
+
+    from kod.cli import _get_config
+
+    config = MagicMock()
+    ctx = MagicMock()
+    ctx.obj = {"config": config}
+    assert _get_config(ctx) is config
+
+
+def test_get_config_missing_file_raises():
+    from unittest.mock import MagicMock
+
+    import click
+
+    from kod.cli import _get_config
+
+    ctx = MagicMock()
+    ctx.obj = {"config_path": "nonexistent.yaml"}
+    with pytest.raises(click.BadParameter, match="No such file"):
+        _get_config(ctx)
+
+
+def test_invalid_config_shows_clean_error(runner, tmp_path):
+    bad_config = tmp_path / "bad.yaml"
+    bad_config.write_text("sources: not_a_list")
+    result = runner.invoke(cli, ["--config", str(bad_config), "extract"])
+    assert result.exit_code != 0
+    assert "Error" in result.output
