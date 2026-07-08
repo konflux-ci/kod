@@ -8,6 +8,8 @@ import yaml
 
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import field_validator
+from pydantic import model_validator
 
 
 logger = logging.getLogger(__name__)
@@ -18,9 +20,46 @@ class DocumentSource(BaseModel):
 
     name: str = Field(description="Human-readable name for this source")
     url: str = Field(description="URL of the documentation source")
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        if any(c in v for c in ("/", "\\", "\0")):
+            msg = "name must not contain '/', '\\', or null bytes"
+            raise ValueError(msg)
+        if ".." in v:
+            msg = "name must not contain '..'"
+            raise ValueError(msg)
+        return v
+
     metadata: dict[str, str] = Field(
-        default_factory=dict, description="Additional metadata attached to extracted documents"
+        default_factory=dict,
+        description="Additional metadata attached to extracted documents",
     )
+    include_paths: list[str] = Field(
+        default_factory=list,
+        description="Only extract from these paths within the source",
+    )
+    exclude_paths: list[str] = Field(
+        default_factory=list,
+        description="Exclude these paths from extraction",
+    )
+    max_pages: int = Field(
+        default=50,
+        ge=1,
+        description="Maximum number of pages to crawl for web sources",
+    )
+    use_sitemap: bool = Field(
+        default=True,
+        description="Try sitemap.xml before crawling links for web sources",
+    )
+
+    @model_validator(mode="after")
+    def _check_paths_mutual_exclusivity(self):
+        if self.include_paths and self.exclude_paths:
+            msg = "include_paths and exclude_paths cannot both be set"
+            raise ValueError(msg)
+        return self
 
 
 class KodConfig(BaseModel):
@@ -28,6 +67,14 @@ class KodConfig(BaseModel):
 
     sources: list[DocumentSource] = Field(
         min_length=1, description="List of documentation sources to index"
+    )
+    data_dir: Path = Field(
+        default=Path("data"),
+        description="Working directory for pipeline intermediate files",
+    )
+    doc_extensions: set[str] = Field(
+        default={".md", ".adoc", ".html", ".htm"},
+        description="File extensions to extract from git sources",
     )
 
 

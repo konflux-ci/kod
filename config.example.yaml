@@ -3,18 +3,23 @@
 
 sources:
   - name: konflux-ci-docs
-    url: https://github.com/konflux-ci/konflux-ci.dev.git
+    url: https://github.com/konflux-ci/docs.git
+    include_paths:
+      - modules
     metadata:
       product: Konflux
 
   - name: konflux-ci-architecture
     url: https://github.com/konflux-ci/architecture.git
+    exclude_paths:
+      - .git
     metadata:
       product: Konflux
       topic: architecture
 
-  - name: konflux-homepage
-    url: https://konflux-ci.dev/
+  - name: konflux-operator
+    url: https://konflux-ci.dev/konflux-ci/docs/
+    max_pages: 50
     metadata:
       product: Konflux
-      topic: overview
+      topic: Konflux Operator Docs

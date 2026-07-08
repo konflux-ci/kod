@@ -1,5 +1,7 @@
 """Tests for KOD CLI subcommands."""
 
+from unittest.mock import patch
+
 import pytest
 
 from click.testing import CliRunner
@@ -34,11 +36,25 @@ def test_subcommand_help(runner, cmd):
 
 @pytest.mark.parametrize(
     "cmd",
-    ["extract", "transform", "embed", "index", "build-image", "pipeline"],
+    ["transform", "embed", "index", "build-image"],
 )
 def test_subcommand_runs_with_config(runner, sample_config_yaml, cmd):
     result = runner.invoke(cli, ["--config", sample_config_yaml, cmd])
     assert result.exit_code == 0, f"Failed for '{cmd}': {result.output}"
+
+
+@patch("kod.pipeline.extract.run_extract")
+def test_extract_runs_with_config(mock_extract, runner, sample_config_yaml):
+    result = runner.invoke(cli, ["--config", sample_config_yaml, "extract"])
+    assert result.exit_code == 0
+    mock_extract.assert_called_once()
+
+
+@patch("kod.pipeline.extract.run_extract")
+def test_pipeline_runs_with_config(mock_extract, runner, sample_config_yaml):
+    result = runner.invoke(cli, ["--config", sample_config_yaml, "pipeline"])
+    assert result.exit_code == 0
+    mock_extract.assert_called_once()
 
 
 def test_serve_stub(runner, sample_config_yaml):

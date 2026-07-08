@@ -2,6 +2,8 @@
 
 import textwrap
 
+from pathlib import Path
+
 import pytest
 
 from pydantic import ValidationError
@@ -40,6 +42,81 @@ def test_source_missing_url_rejected():
         DocumentSource(name="test")
 
 
+def test_source_include_paths():
+    source = DocumentSource(
+        name="test",
+        url="https://github.com/org/repo.git",
+        include_paths=["docs", "content"],
+    )
+    assert source.include_paths == ["docs", "content"]
+    assert source.exclude_paths == []
+
+
+def test_source_exclude_paths():
+    source = DocumentSource(
+        name="test",
+        url="https://github.com/org/repo.git",
+        exclude_paths=["vendor", ".github"],
+    )
+    assert source.exclude_paths == ["vendor", ".github"]
+    assert source.include_paths == []
+
+
+def test_source_max_pages_default():
+    source = DocumentSource(name="test", url="https://example.com")
+    assert source.max_pages == 50
+
+
+def test_source_max_pages_custom():
+    source = DocumentSource(name="test", url="https://example.com", max_pages=100)
+    assert source.max_pages == 100
+
+
+def test_source_max_pages_zero_rejected():
+    with pytest.raises(ValidationError, match="max_pages"):
+        DocumentSource(name="test", url="https://example.com", max_pages=0)
+
+
+def test_source_use_sitemap_default():
+    source = DocumentSource(name="test", url="https://example.com")
+    assert source.use_sitemap is True
+
+
+def test_source_use_sitemap_disabled():
+    source = DocumentSource(name="test", url="https://example.com", use_sitemap=False)
+    assert source.use_sitemap is False
+
+
+def test_source_name_with_slash_rejected():
+    with pytest.raises(ValidationError, match="name"):
+        DocumentSource(name="../../etc", url="https://example.com")
+
+
+def test_source_name_with_backslash_rejected():
+    with pytest.raises(ValidationError, match="name"):
+        DocumentSource(name="a\\b", url="https://example.com")
+
+
+def test_source_name_with_dotdot_rejected():
+    with pytest.raises(ValidationError, match="name"):
+        DocumentSource(name="a..b", url="https://example.com")
+
+
+def test_source_name_with_null_rejected():
+    with pytest.raises(ValidationError, match="name"):
+        DocumentSource(name="a\0b", url="https://example.com")
+
+
+def test_source_both_paths_rejected():
+    with pytest.raises(ValidationError, match="include_paths and exclude_paths"):
+        DocumentSource(
+            name="test",
+            url="https://github.com/org/repo.git",
+            include_paths=["docs"],
+            exclude_paths=["vendor"],
+        )
+
+
 def test_empty_sources_rejected():
     with pytest.raises(ValidationError, match="sources"):
         KodConfig(sources=[])
@@ -52,6 +129,20 @@ def test_valid_config():
         ]
     )
     assert len(config.sources) == 1
+
+
+def test_data_dir_default():
+    config = KodConfig(sources=[DocumentSource(name="test", url="https://example.com")])
+    assert config.data_dir == Path("data")
+
+
+def test_data_dir_custom(tmp_path):
+    custom = tmp_path / "custom"
+    config = KodConfig(
+        sources=[DocumentSource(name="test", url="https://example.com")],
+        data_dir=custom,
+    )
+    assert config.data_dir == custom
 
 
 def test_load_valid_config(sample_config_yaml):
