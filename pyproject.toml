@@ -10,6 +10,7 @@ dependencies = [
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "unstructured[md]>=0.16",
+    "pydowndoc[bin]>=2.4",
 ]
 
 [project.scripts]

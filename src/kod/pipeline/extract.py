@@ -1,6 +1,7 @@
 """Extract step - fetch documents from configured sources."""
 
 import logging
+import re
 import shutil
 import subprocess
 import xml.etree.ElementTree as ET
@@ -14,6 +15,8 @@ from urllib.parse import urldefrag
 from urllib.parse import urljoin
 from urllib.parse import urlparse
 from urllib.request import urlopen
+
+import pydowndoc
 
 from unstructured.partition.auto import partition
 from unstructured.partition.html import partition_html
@@ -79,15 +82,14 @@ def _extract_git_source(
     for file_path in _find_doc_files(
         clone_dir, doc_extensions, source.include_paths, source.exclude_paths
     ):
-        # Use "fast" strategy to skip OCR and expensive model-based parsing
-        elements = partition(filename=str(file_path), strategy="fast")
-        text = _elements_to_text(elements)
-        if not text:
+        elements = _partition_file(file_path)
+        element_dicts = [e.to_dict() for e in elements]
+        if not _has_text(element_dicts):
             continue
         rel_path = str(file_path.relative_to(clone_dir))
         documents.append(
             Document(
-                content=text,
+                elements=element_dicts,
                 source_name=source.name,
                 source_url=source.url,
                 file_path=rel_path,
@@ -230,12 +232,12 @@ def _extract_web_pages_by_url(source: DocumentSource, urls: list[str]) -> list[D
     documents = []
     for url in urls:
         elements = partition_html(url=url)
-        text = _elements_to_text(elements)
-        if not text:
+        element_dicts = [e.to_dict() for e in elements]
+        if not _has_text(element_dicts):
             continue
         documents.append(
             Document(
-                content=text,
+                elements=element_dicts,
                 source_name=source.name,
                 source_url=source.url,
                 file_path=urlparse(url).path,
@@ -251,14 +253,13 @@ def _extract_web_pages_from_crawl(
     """Partition pre-fetched HTML from crawl results (avoids double-fetching)."""
     documents = []
     for url, html in crawled:
-        # Use text= instead of url= since HTML was already fetched during crawl
         elements = partition_html(text=html)
-        text = _elements_to_text(elements)
-        if not text:
+        element_dicts = [e.to_dict() for e in elements]
+        if not _has_text(element_dicts):
             continue
         documents.append(
             Document(
-                content=text,
+                elements=element_dicts,
                 source_name=source.name,
                 source_url=source.url,
                 file_path=urlparse(url).path,
@@ -307,9 +308,61 @@ def _find_doc_files(
     return sorted(files)
 
 
-def _elements_to_text(elements: list) -> str:
-    """Join non-empty Unstructured element texts with double newlines."""
-    return "\n\n".join(e.text for e in elements if e.text and e.text.strip())
+def _partition_file(file_path: Path) -> list:
+    """Partition a file, converting AsciiDoc to Markdown first if needed.
+
+    Unstructured's partitioner misclassifies AsciiDoc markup: ``==`` headers
+    become NarrativeText and short lines like "In practice:" become false
+    Title elements, which corrupts section boundaries in downstream chunking.
+    Converting to Markdown first lets partition() see ``#`` headers it handles
+    correctly.
+    """
+    if file_path.suffix == ".adoc":
+        file_path = _convert_adoc_to_md(file_path)
+    return partition(filename=str(file_path), strategy="fast")
+
+
+def _convert_adoc_to_md(file_path: Path) -> Path:
+    """Convert an AsciiDoc file to Markdown, writing a .md file alongside it."""
+    content = file_path.read_text()
+    md_path = file_path.with_suffix(".md")
+    if not content.strip():
+        md_path.write_text("")
+        return md_path
+    description = _extract_adoc_description(content)
+    md_text = pydowndoc.convert_string(content)
+    if description:
+        md_text = _insert_after_first_heading(md_text, description)
+    md_path.write_text(md_text)
+    return md_path
+
+
+def _insert_after_first_heading(md_text: str, paragraph: str) -> str:
+    """Insert a paragraph after the first Markdown heading line."""
+    lines = md_text.split("\n", 1)
+    if lines and lines[0].startswith("#"):
+        rest = lines[1] if len(lines) > 1 else ""
+        return f"{lines[0]}\n\n{paragraph}\n{rest}"
+    return f"{paragraph}\n\n{md_text}"
+
+
+_ADOC_DESCRIPTION_RE = re.compile(r"^:description:\s*(.+)$", re.MULTILINE)
+
+
+def _extract_adoc_description(content: str) -> str | None:
+    """Extract the :description: attribute value from AsciiDoc content.
+
+    Downdoc drops AsciiDoc document attributes (they are metadata, not
+    content).  The :description: attribute is a page summary that, when
+    present, provides useful context for RAG retrieval.
+    """
+    m = _ADOC_DESCRIPTION_RE.search(content)
+    return m.group(1).strip() if m else None
+
+
+def _has_text(element_dicts: list[dict]) -> bool:
+    """Check whether any element contains non-empty text."""
+    return any(e.get("text", "").strip() for e in element_dicts)
 
 
 def _write_documents(documents: list[Document], path: Path) -> None:

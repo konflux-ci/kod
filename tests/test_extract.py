@@ -10,24 +10,37 @@ from kod.config import DocumentSource
 from kod.config import KodConfig
 from kod.models import Document
 from kod.pipeline.extract import _clone_repo
+from kod.pipeline.extract import _convert_adoc_to_md
 from kod.pipeline.extract import _discover_urls_by_crawling
 from kod.pipeline.extract import _discover_urls_from_sitemap
-from kod.pipeline.extract import _elements_to_text
+from kod.pipeline.extract import _extract_adoc_description
 from kod.pipeline.extract import _extract_git_source
 from kod.pipeline.extract import _extract_links
 from kod.pipeline.extract import _extract_source
 from kod.pipeline.extract import _extract_web_source
 from kod.pipeline.extract import _find_doc_files
+from kod.pipeline.extract import _has_text
+from kod.pipeline.extract import _insert_after_first_heading
 from kod.pipeline.extract import _is_git_url
 from kod.pipeline.extract import _is_under_path
 from kod.pipeline.extract import _normalize_url
+from kod.pipeline.extract import _partition_file
 from kod.pipeline.extract import _write_documents
 from kod.pipeline.extract import run_extract
 
 
 class FakeElement:
-    def __init__(self, text):
+    def __init__(self, text, category="NarrativeText"):
         self.text = text
+        self.category = category
+
+    def to_dict(self):
+        return {"type": self.category, "text": self.text, "metadata": {}}
+
+
+def _fake_elements(*texts):
+    """Create serialized element dicts for test Documents."""
+    return [{"type": "NarrativeText", "text": t, "metadata": {}} for t in texts]
 
 
 def _git_source(**overrides):
@@ -139,31 +152,120 @@ def test_find_doc_files_no_paths_walks_all(tmp_path):
     assert len(result) == 2
 
 
-# --- _elements_to_text ---
+# --- _has_text ---
 
 
-def test_elements_to_text():
-    elements = [FakeElement("Hello"), FakeElement("World")]
-    assert _elements_to_text(elements) == "Hello\n\nWorld"
+def test_has_text_with_content():
+    assert _has_text([{"text": "Hello"}, {"text": "World"}]) is True
 
 
-def test_elements_to_text_skips_empty():
-    elements = [FakeElement("Hello"), FakeElement(""), FakeElement("World")]
-    assert _elements_to_text(elements) == "Hello\n\nWorld"
+def test_has_text_empty_list():
+    assert _has_text([]) is False
 
 
-def test_elements_to_text_skips_whitespace():
-    elements = [FakeElement("Hello"), FakeElement("   "), FakeElement("World")]
-    assert _elements_to_text(elements) == "Hello\n\nWorld"
+def test_has_text_all_empty():
+    assert _has_text([{"text": ""}, {"text": "   "}]) is False
 
 
-def test_elements_to_text_empty_list():
-    assert _elements_to_text([]) == ""
+def test_has_text_skips_missing_key():
+    assert _has_text([{"type": "Title"}]) is False
 
 
-def test_elements_to_text_skips_none():
-    elements = [FakeElement(None), FakeElement("Hello")]
-    assert _elements_to_text(elements) == "Hello"
+def test_has_text_mixed():
+    assert _has_text([{"text": ""}, {"text": "Content"}]) is True
+
+
+# --- _extract_adoc_description ---
+
+
+def test_extract_adoc_description():
+    content = "= Title\n:description: Page summary.\n\nBody"
+    assert _extract_adoc_description(content) == "Page summary."
+
+
+def test_extract_adoc_description_none():
+    assert _extract_adoc_description("= Title\n\nBody") is None
+
+
+def test_extract_adoc_description_strips_whitespace():
+    content = ":description:   Spaced out.  \n"
+    assert _extract_adoc_description(content) == "Spaced out."
+
+
+# --- _insert_after_first_heading ---
+
+
+def test_insert_after_first_heading():
+    assert _insert_after_first_heading("# Title\n\nBody", "Desc") == "# Title\n\nDesc\n\nBody"
+
+
+def test_insert_after_first_heading_no_heading():
+    assert _insert_after_first_heading("Just text", "Desc") == "Desc\n\nJust text"
+
+
+# --- _convert_adoc_to_md ---
+
+
+@patch("kod.pipeline.extract.pydowndoc.convert_string", return_value="## Title\n\nBody")
+def test_convert_adoc_to_md(mock_convert, tmp_path):
+    adoc = tmp_path / "doc.adoc"
+    adoc.write_text("== Title\n\nBody")
+
+    result = _convert_adoc_to_md(adoc)
+
+    assert result == tmp_path / "doc.md"
+    assert result.read_text() == "## Title\n\nBody"
+    mock_convert.assert_called_once_with("== Title\n\nBody")
+
+
+@patch("kod.pipeline.extract.pydowndoc.convert_string", return_value="## Title\n\nBody")
+def test_convert_adoc_to_md_with_description(mock_convert, tmp_path):
+    adoc = tmp_path / "doc.adoc"
+    adoc.write_text("= Title\n:description: Page summary.\n\n== Section\n\nBody")
+
+    result = _convert_adoc_to_md(adoc)
+
+    assert result.read_text() == "## Title\n\nPage summary.\n\nBody"
+
+
+def test_convert_adoc_to_md_empty_file(tmp_path):
+    adoc = tmp_path / "empty.adoc"
+    adoc.write_text("")
+
+    result = _convert_adoc_to_md(adoc)
+
+    assert result == tmp_path / "empty.md"
+    assert result.read_text() == ""
+
+
+# --- _partition_file ---
+
+
+@patch("kod.pipeline.extract.partition")
+@patch("kod.pipeline.extract._convert_adoc_to_md")
+def test_partition_file_adoc(mock_convert, mock_partition, tmp_path):
+    md_path = tmp_path / "doc.md"
+    md_path.write_text("## Title\n\nBody")
+    mock_convert.return_value = md_path
+    mock_partition.return_value = [FakeElement("Title", "Title")]
+    adoc = tmp_path / "doc.adoc"
+    adoc.write_text("== Title\n\nBody")
+
+    _partition_file(adoc)
+
+    mock_convert.assert_called_once_with(adoc)
+    mock_partition.assert_called_once_with(filename=str(md_path), strategy="fast")
+
+
+@patch("kod.pipeline.extract.partition")
+def test_partition_file_non_adoc(mock_partition, tmp_path):
+    mock_partition.return_value = [FakeElement("Hello")]
+    md = tmp_path / "doc.md"
+    md.write_text("# Hello")
+
+    _partition_file(md)
+
+    mock_partition.assert_called_once_with(filename=str(md), strategy="fast")
 
 
 # --- _write_documents ---
@@ -172,14 +274,14 @@ def test_elements_to_text_skips_none():
 def test_write_documents(tmp_path):
     docs = [
         Document(
-            content="Hello",
+            elements=_fake_elements("Hello"),
             source_name="src",
             source_url="https://example.com",
             file_path="a.md",
             metadata={"k": "v"},
         ),
         Document(
-            content="World",
+            elements=_fake_elements("World"),
             source_name="src",
             source_url="https://example.com",
         ),
@@ -190,14 +292,14 @@ def test_write_documents(tmp_path):
     lines = path.read_text().strip().split("\n")
     assert len(lines) == 2
     parsed = json.loads(lines[0])
-    assert parsed["content"] == "Hello"
+    assert parsed["elements"][0]["text"] == "Hello"
     assert parsed["file_path"] == "a.md"
     assert parsed["metadata"] == {"k": "v"}
 
 
 def test_write_documents_roundtrip(tmp_path):
     doc = Document(
-        content="Test",
+        elements=_fake_elements("Test"),
         source_name="s",
         source_url="https://example.com",
     )
@@ -685,7 +787,7 @@ def test_extract_source_web(mock_web, tmp_path):
 def test_run_extract(mock_extract, tmp_path):
     mock_extract.return_value = [
         Document(
-            content="Hello",
+            elements=_fake_elements("Hello"),
             source_name="test",
             source_url="https://example.com",
         )
@@ -721,7 +823,7 @@ def test_run_extract_empty_source(mock_extract, tmp_path):
 @patch("kod.pipeline.extract._extract_source")
 def test_run_extract_continues_after_source_failure(mock_extract, tmp_path):
     good_doc = Document(
-        content="Hello",
+        elements=_fake_elements("Hello"),
         source_name="good",
         source_url="https://example.com",
     )
