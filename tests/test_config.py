@@ -192,3 +192,47 @@ def test_load_multiple_sources(tmp_path):
     assert len(config.sources) == 2
     assert config.sources[0].name == "repo-a"
     assert config.sources[1].name == "page-b"
+
+
+def test_chunk_size_default():
+    config = KodConfig(sources=[DocumentSource(name="test", url="https://example.com")])
+    assert config.chunk_size == 1000
+
+
+def test_chunk_size_custom():
+    config = KodConfig(
+        sources=[DocumentSource(name="test", url="https://example.com")],
+        chunk_size=500,
+    )
+    assert config.chunk_size == 500
+
+
+def test_chunk_overlap_default():
+    config = KodConfig(sources=[DocumentSource(name="test", url="https://example.com")])
+    assert config.chunk_overlap == 200
+
+
+def test_chunk_overlap_custom():
+    config = KodConfig(
+        sources=[DocumentSource(name="test", url="https://example.com")],
+        chunk_overlap=100,
+    )
+    assert config.chunk_overlap == 100
+
+
+def test_chunk_overlap_equals_chunk_size_rejected():
+    with pytest.raises(ValidationError, match="chunk_overlap"):
+        KodConfig(
+            sources=[DocumentSource(name="test", url="https://example.com")],
+            chunk_size=500,
+            chunk_overlap=500,
+        )
+
+
+def test_chunk_overlap_exceeds_chunk_size_rejected():
+    with pytest.raises(ValidationError, match="chunk_overlap"):
+        KodConfig(
+            sources=[DocumentSource(name="test", url="https://example.com")],
+            chunk_size=500,
+            chunk_overlap=600,
+        )

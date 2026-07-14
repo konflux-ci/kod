@@ -76,6 +76,23 @@ class KodConfig(BaseModel):
         default={".md", ".adoc", ".html", ".htm"},
         description="File extensions to extract from git sources",
     )
+    chunk_size: int = Field(
+        default=1000,
+        ge=1,
+        description="Maximum characters per chunk",
+    )
+    chunk_overlap: int = Field(
+        default=200,
+        ge=0,
+        description="Character overlap between consecutive chunks",
+    )
+
+    @model_validator(mode="after")
+    def _check_chunk_overlap(self):
+        if self.chunk_overlap >= self.chunk_size:
+            msg = "chunk_overlap must be less than chunk_size"
+            raise ValueError(msg)
+        return self
 
 
 def load_config(path: str | Path) -> KodConfig:

@@ -152,6 +152,16 @@ def test_find_doc_files_no_paths_walks_all(tmp_path):
     assert len(result) == 2
 
 
+def test_find_doc_files_skips_symlinks(tmp_path):
+    (tmp_path / "real.md").write_text("content")
+    (tmp_path / "link.md").symlink_to(tmp_path / "real.md")
+
+    result = _find_doc_files(tmp_path, {".md"})
+    names = [p.name for p in result]
+    assert "real.md" in names
+    assert "link.md" not in names
+
+
 # --- _has_text ---
 
 
@@ -213,7 +223,7 @@ def test_convert_adoc_to_md(mock_convert, tmp_path):
 
     result = _convert_adoc_to_md(adoc)
 
-    assert result == tmp_path / "doc.md"
+    assert result == tmp_path / "doc.adoc.md"
     assert result.read_text() == "## Title\n\nBody"
     mock_convert.assert_called_once_with("== Title\n\nBody")
 
@@ -234,7 +244,7 @@ def test_convert_adoc_to_md_empty_file(tmp_path):
 
     result = _convert_adoc_to_md(adoc)
 
-    assert result == tmp_path / "empty.md"
+    assert result == tmp_path / "empty.adoc.md"
     assert result.read_text() == ""
 
 
@@ -255,6 +265,21 @@ def test_partition_file_adoc(mock_convert, mock_partition, tmp_path):
 
     mock_convert.assert_called_once_with(adoc)
     mock_partition.assert_called_once_with(filename=str(md_path), strategy="fast")
+
+
+@patch("kod.pipeline.extract.partition")
+@patch("kod.pipeline.extract._convert_adoc_to_md")
+def test_partition_file_uppercase_adoc(mock_convert, mock_partition, tmp_path):
+    md_path = tmp_path / "DOC.ADOC.md"
+    md_path.write_text("## Title\n\nBody")
+    mock_convert.return_value = md_path
+    mock_partition.return_value = [FakeElement("Title", "Title")]
+    adoc = tmp_path / "DOC.ADOC"
+    adoc.write_text("== Title\n\nBody")
+
+    _partition_file(adoc)
+
+    mock_convert.assert_called_once_with(adoc)
 
 
 @patch("kod.pipeline.extract.partition")

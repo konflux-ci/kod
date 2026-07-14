@@ -60,8 +60,15 @@ KOD reads document sources from a YAML configuration file. See
 
 Each source has:
 - **name** - human-readable identifier
-- **url** - URL of the documentation source
+- **url** - git repository (`.git` suffix) or web page URL
 - **metadata** - key-value pairs attached to extracted documents (optional)
+- **include_paths** / **exclude_paths** - filter files within a git source (mutually exclusive, optional)
+- **max_pages** - maximum pages to crawl for web sources (default: 50)
+- **use_sitemap** - try `sitemap.xml` before crawling links (default: true)
+
+Global pipeline settings:
+- **chunk_size** - maximum characters per chunk (default: 1000)
+- **chunk_overlap** - character overlap between consecutive chunks (default: 200)
 
 ## Development
 

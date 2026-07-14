@@ -288,7 +288,11 @@ def _find_doc_files(
     exclude_paths: list[str] | None = None,
 ) -> list[Path]:
     """Walk directory for files matching doc_extensions, filtered by include/exclude paths."""
-    files = (p for p in directory.rglob("*") if p.is_file() and p.suffix.lower() in doc_extensions)
+    files = (
+        p
+        for p in directory.rglob("*")
+        if p.is_file() and not p.is_symlink() and p.suffix.lower() in doc_extensions
+    )
     if include_paths:
         files = (
             p
@@ -317,15 +321,19 @@ def _partition_file(file_path: Path) -> list:
     Converting to Markdown first lets partition() see ``#`` headers it handles
     correctly.
     """
-    if file_path.suffix == ".adoc":
+    if file_path.suffix.lower() == ".adoc":
         file_path = _convert_adoc_to_md(file_path)
     return partition(filename=str(file_path), strategy="fast")
 
 
 def _convert_adoc_to_md(file_path: Path) -> Path:
-    """Convert an AsciiDoc file to Markdown, writing a .md file alongside it."""
+    """Convert an AsciiDoc file to Markdown, writing a .adoc.md file alongside it.
+
+    Uses .adoc.md instead of .md to avoid overwriting a real .md file if the
+    repo contains both foo.adoc and foo.md.
+    """
     content = file_path.read_text()
-    md_path = file_path.with_suffix(".md")
+    md_path = file_path.parent / (file_path.name + ".md")
     if not content.strip():
         md_path.write_text("")
         return md_path

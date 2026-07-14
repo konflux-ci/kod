@@ -1,6 +1,9 @@
 # KOD configuration file
 # Lists documentation sources for the ETL pipeline to extract, chunk, embed, and index.
 
+chunk_size: 2048
+chunk_overlap: 200
+
 sources:
   - name: konflux-ci-docs
     url: https://github.com/konflux-ci/docs.git
