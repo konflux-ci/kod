@@ -236,3 +236,16 @@ def test_chunk_overlap_exceeds_chunk_size_rejected():
             chunk_size=500,
             chunk_overlap=600,
         )
+
+
+def test_embedding_model_default():
+    config = KodConfig(sources=[DocumentSource(name="test", url="https://example.com")])
+    assert config.embedding_model == "BAAI/bge-small-en-v1.5"
+
+
+def test_embedding_model_custom():
+    config = KodConfig(
+        sources=[DocumentSource(name="test", url="https://example.com")],
+        embedding_model="BAAI/bge-base-en-v1.5",
+    )
+    assert config.embedding_model == "BAAI/bge-base-en-v1.5"

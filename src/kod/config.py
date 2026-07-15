@@ -86,6 +86,10 @@ class KodConfig(BaseModel):
         ge=0,
         description="Character overlap between consecutive chunks",
     )
+    embedding_model: str = Field(
+        default="BAAI/bge-small-en-v1.5",
+        description="FastEmbed model name for generating embeddings",
+    )
 
     @model_validator(mode="after")
     def _check_chunk_overlap(self):

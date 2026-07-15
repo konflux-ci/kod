@@ -5,11 +5,9 @@ import json
 from kod.config import DocumentSource
 from kod.config import KodConfig
 from kod.models import Document
-from kod.models import DocumentChunk
 from kod.pipeline.transform import _chunk_document
 from kod.pipeline.transform import _get_section_title
 from kod.pipeline.transform import _read_documents
-from kod.pipeline.transform import _write_chunks
 from kod.pipeline.transform import run_transform
 
 
@@ -280,62 +278,6 @@ def test_chunk_document_section_title_propagation():
     assert len(chunks) > 2
     for chunk in chunks:
         assert chunk.section_title in ("First", "Second")
-
-
-# --- _write_chunks ---
-
-
-def test_write_chunks(tmp_path):
-    chunks = [
-        DocumentChunk(
-            document_id="test:doc.md",
-            content="Chunk 1",
-            chunk_index=0,
-            source_name="test",
-            source_url="https://example.com",
-            section_title="Intro",
-        ),
-        DocumentChunk(
-            document_id="test:doc.md",
-            content="Chunk 2",
-            chunk_index=1,
-            source_name="test",
-            source_url="https://example.com",
-        ),
-    ]
-    path = tmp_path / "out.jsonl"
-    _write_chunks(chunks, path)
-
-    lines = path.read_text().strip().split("\n")
-    assert len(lines) == 2
-    parsed = json.loads(lines[0])
-    assert parsed["content"] == "Chunk 1"
-    assert parsed["section_title"] == "Intro"
-
-
-def test_write_chunks_empty(tmp_path):
-    path = tmp_path / "out.jsonl"
-    _write_chunks([], path)
-    assert path.read_text() == ""
-
-
-def test_write_chunks_roundtrip(tmp_path):
-    chunk = DocumentChunk(
-        document_id="s:doc.md",
-        content="Test chunk",
-        chunk_index=0,
-        source_name="s",
-        source_url="https://example.com",
-        file_path="doc.md",
-        section_title="Title",
-        metadata={"k": "v"},
-    )
-    path = tmp_path / "out.jsonl"
-    _write_chunks([chunk], path)
-
-    line = path.read_text().strip()
-    restored = DocumentChunk.model_validate_json(line)
-    assert restored == chunk
 
 
 # --- run_transform ---

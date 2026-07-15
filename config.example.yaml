@@ -3,6 +3,7 @@
 
 chunk_size: 2048
 chunk_overlap: 200
+embedding_model: BAAI/bge-small-en-v1.5
 
 sources:
   - name: konflux-ci-docs

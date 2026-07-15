@@ -11,6 +11,8 @@ dependencies = [
     "pyyaml>=6.0",
     "unstructured[md]>=0.16",
     "pydowndoc[bin]>=2.4",
+    "fastembed>=0.8",
+    "faiss-cpu>=1.14",
 ]
 
 [project.scripts]

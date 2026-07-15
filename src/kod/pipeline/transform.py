@@ -10,6 +10,7 @@ from unstructured.staging.base import elements_from_dicts
 from kod.config import KodConfig
 from kod.models import Document
 from kod.models import DocumentChunk
+from kod.pipeline.io import write_chunks
 
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ def run_transform(config: KodConfig) -> None:
             for doc in documents:
                 chunks.extend(_chunk_document(doc, config.chunk_size, config.chunk_overlap))
             output_path = chunked_dir / f"{source.name}.jsonl"
-            _write_chunks(chunks, output_path)
+            write_chunks(chunks, output_path)
             logger.info(
                 "[transform] Wrote %d chunk(s) from %d document(s) to %s",
                 len(chunks),
@@ -114,8 +115,3 @@ def _get_section_title(chunk) -> str | None:
     return None
 
 
-def _write_chunks(chunks: list[DocumentChunk], path: Path) -> None:
-    """Serialize chunks to a JSONL file."""
-    with path.open("w") as f:
-        for chunk in chunks:
-            f.write(chunk.model_dump_json() + "\n")
