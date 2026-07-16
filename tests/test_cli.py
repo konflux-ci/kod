@@ -57,9 +57,54 @@ def test_pipeline_runs_with_config(mock_extract, runner, sample_config_yaml):
     mock_extract.assert_called_once()
 
 
-def test_serve_stub(runner, sample_config_yaml):
-    result = runner.invoke(cli, ["--config", sample_config_yaml, "serve"])
+@patch("kod.server.run_server")
+def test_serve_runs(mock_run, runner, tmp_path):
+    result = runner.invoke(cli, ["serve", "--data-dir", str(tmp_path)])
     assert result.exit_code == 0
+    mock_run.assert_called_once_with(
+        data_dir=str(tmp_path),
+        embedding_model="BAAI/bge-small-en-v1.5",
+        rrf_k=60,
+        max_queries=5,
+        max_top_k=20,
+    )
+
+
+@patch("kod.server.run_server")
+def test_serve_model_flag(mock_run, runner, tmp_path):
+    result = runner.invoke(
+        cli, ["serve", "--data-dir", str(tmp_path), "--model", "custom/model"]
+    )
+    assert result.exit_code == 0
+    mock_run.assert_called_once_with(
+        data_dir=str(tmp_path),
+        embedding_model="custom/model",
+        rrf_k=60,
+        max_queries=5,
+        max_top_k=20,
+    )
+
+
+@patch("kod.server.run_server")
+def test_serve_tuning_flags(mock_run, runner, tmp_path):
+    result = runner.invoke(
+        cli,
+        [
+            "serve",
+            "--data-dir", str(tmp_path),
+            "--rrf-k", "30",
+            "--max-queries", "3",
+            "--max-top-k", "10",
+        ],
+    )
+    assert result.exit_code == 0
+    mock_run.assert_called_once_with(
+        data_dir=str(tmp_path),
+        embedding_model="BAAI/bge-small-en-v1.5",
+        rrf_k=30,
+        max_queries=3,
+        max_top_k=10,
+    )
 
 
 def test_missing_config_fails(runner):

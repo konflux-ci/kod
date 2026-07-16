@@ -1,7 +1,6 @@
 """KOD CLI - Konflux Offline Documentation pipeline."""
 
 import logging
-import sys
 
 import click
 
@@ -98,11 +97,56 @@ def build_image(ctx: click.Context) -> None:
 
 
 @cli.command()
-@click.pass_context
-def serve(ctx: click.Context) -> None:
+@click.option(
+    "--data-dir",
+    type=click.Path(exists=True),
+    envvar="KOD_DATA_DIR",
+    default="data",
+    show_default=True,
+    help="Path to the data directory containing the FAISS index.",
+)
+@click.option(
+    "--model",
+    envvar="KOD_EMBEDDING_MODEL",
+    default="BAAI/bge-small-en-v1.5",
+    show_default=True,
+    help="FastEmbed model name for query embedding.",
+)
+@click.option(
+    "--rrf-k",
+    type=int,
+    envvar="KOD_RRF_K",
+    default=60,
+    show_default=True,
+    help="RRF constant k for reciprocal rank fusion.",
+)
+@click.option(
+    "--max-queries",
+    type=int,
+    envvar="KOD_MAX_QUERIES",
+    default=5,
+    show_default=True,
+    help="Maximum number of query reformulations to accept.",
+)
+@click.option(
+    "--max-top-k",
+    type=int,
+    envvar="KOD_MAX_TOP_K",
+    default=20,
+    show_default=True,
+    help="Maximum top_k value allowed per search request.",
+)
+def serve(data_dir: str, model: str, rrf_k: int, max_queries: int, max_top_k: int) -> None:
     """Start the MCP server."""
-    logger.info("MCP server not yet implemented")
-    sys.exit(0)
+    from kod.server import run_server
+
+    run_server(
+        data_dir=data_dir,
+        embedding_model=model,
+        rrf_k=rrf_k,
+        max_queries=max_queries,
+        max_top_k=max_top_k,
+    )
 
 
 @cli.command()
