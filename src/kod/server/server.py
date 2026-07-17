@@ -10,6 +10,7 @@ from fastmcp import FastMCP
 
 from kod.server.app import load_app_context
 from kod.server.tools import configure as _configure_tools
+from kod.server.tools import get_document
 from kod.server.tools import search_knowledge
 
 
@@ -37,6 +38,7 @@ mcp = FastMCP(
 )
 
 mcp.tool()(search_knowledge)
+mcp.tool()(get_document)
 
 
 def run_server(

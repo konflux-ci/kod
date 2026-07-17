@@ -5,6 +5,8 @@ Usage:
     uv run python scripts/mcp_client.py -k 5 "your query here"
     uv run python scripts/mcp_client.py --url http://localhost:8000/mcp "your query"
     uv run python scripts/mcp_client.py --list-tools
+    uv run python scripts/mcp_client.py --get-document "source:file.md"
+    uv run python scripts/mcp_client.py --get-document "source:file.md" "optional query"
 """
 
 import argparse
@@ -20,6 +22,7 @@ async def main():
     parser.add_argument("-k", type=int, default=5, help="Number of results (default: 5)")
     parser.add_argument("--url", default="http://localhost:8000/mcp", help="MCP server URL")
     parser.add_argument("--list-tools", action="store_true", help="List available tools and exit")
+    parser.add_argument("--get-document", metavar="DOC_ID", help="Retrieve a document by ID")
     args = parser.parse_args()
 
     async with Client(args.url) as client:
@@ -29,8 +32,17 @@ async def main():
                 print(f"{t.name}: {t.description}")
             return
 
+        if args.get_document:
+            params = {"document_id": args.get_document}
+            if args.query:
+                params["query"] = args.query[0]
+            result = await client.call_tool("get_document", params)
+            for block in result.content:
+                print(block.text)
+            return
+
         if not args.query:
-            parser.error("query is required (unless using --list-tools)")
+            parser.error("query is required (unless using --list-tools or --get-document)")
 
         query = args.query if len(args.query) > 1 else args.query[0]
         result = await client.call_tool(

@@ -2,6 +2,8 @@
 
 import logging
 
+import numpy as np
+
 from fastmcp import Context
 
 from kod.models import DocumentChunk
@@ -139,3 +141,77 @@ async def search_knowledge(
         results = _rrf_merge(ranked_lists, app.metadata, top_k)
 
     return [_format_result(app.metadata[idx], score) for idx, score in results]
+
+
+def _find_chunks(
+    metadata: list[DocumentChunk], document_id: str
+) -> list[tuple[int, DocumentChunk]]:
+    """Find all chunks matching a document_id, returning (faiss_idx, chunk) pairs."""
+    return [(i, c) for i, c in enumerate(metadata) if c.document_id == document_id]
+
+
+def _format_header(chunk: DocumentChunk, document_id: str, n_chunks: int) -> str:
+    """Build the metadata header for a document."""
+    title = chunk.section_title or chunk.file_path or document_id
+    return (
+        f"Title: {title}\n"
+        f"Source: {chunk.source_url}\n"
+        f"Document ID: {document_id}\n"
+        f"Sections: {n_chunks}"
+    )
+
+
+def _format_sections(chunks: list[DocumentChunk]) -> str:
+    """Concatenate chunk content in chunk_index order."""
+    ordered = sorted(chunks, key=lambda c: c.chunk_index)
+    return "\n\n".join(c.content for c in ordered)
+
+
+def _rank_by_query(
+    pairs: list[tuple[int, DocumentChunk]], query: str, app: AppContext
+) -> list[tuple[DocumentChunk, float]]:
+    """Rank chunks by vector similarity to the query."""
+    faiss_indices = [idx for idx, _ in pairs]
+    chunks = [c for _, c in pairs]
+
+    query_vec = embed_queries(app.model, [query])
+    chunk_vecs = np.array([app.index.reconstruct(i) for i in faiss_indices], dtype=np.float32)
+    scores = np.dot(chunk_vecs, query_vec.T).flatten()
+
+    return sorted(zip(chunks, scores.tolist(), strict=True), key=lambda x: x[1], reverse=True)
+
+
+async def get_document(
+    document_id: str,
+    query: str = "",
+    *,
+    ctx: Context,
+) -> str:
+    """Retrieve the full content of a document by its ID.
+
+    Use a document_id from search_knowledge results. Pass an optional query
+    to rank sections by relevance instead of document order.
+    """
+    document_id = document_id.strip()
+    if not document_id:
+        return "Please provide a non-empty document_id."
+
+    app: AppContext = ctx.request_context.lifespan_context["app"]
+    pairs = _find_chunks(app.metadata, document_id)
+
+    if not pairs:
+        return f"Document not found: {document_id}"
+
+    first_chunk = pairs[0][1]
+    header = _format_header(first_chunk, document_id, len(pairs))
+
+    if query and query.strip():
+        ranked = _rank_by_query(pairs, query.strip(), app)
+        header += " (ranked by relevance to query)"
+        sections = "\n\n".join(
+            f"[Relevance: {score:.4f}]\n{chunk.content}" for chunk, score in ranked
+        )
+    else:
+        sections = _format_sections([c for _, c in pairs])
+
+    return f"{header}\n\n{sections}"

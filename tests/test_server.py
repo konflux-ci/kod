@@ -15,9 +15,13 @@ from kod.server import tools as _tools_module
 from kod.server.app import AppContext
 from kod.server.app import embed_queries
 from kod.server.app import load_app_context
+from kod.server.tools import _find_chunks
+from kod.server.tools import _format_header
+from kod.server.tools import _format_sections
 from kod.server.tools import _normalize_queries
 from kod.server.tools import _rrf_merge
 from kod.server.tools import configure
+from kod.server.tools import get_document
 from kod.server.tools import search_knowledge
 
 
@@ -536,6 +540,316 @@ def test_search_empty_index():
     assert results == []
 
 
+# --- _find_chunks ---
+
+
+def test_find_chunks_returns_matching():
+    chunks = [
+        _make_chunk(document_id="a", chunk_index=0),
+        _make_chunk(document_id="b", chunk_index=0),
+        _make_chunk(document_id="a", chunk_index=1),
+    ]
+
+    result = _find_chunks(chunks, "a")
+
+    assert len(result) == 2
+    assert result[0] == (0, chunks[0])
+    assert result[1] == (2, chunks[2])
+
+
+def test_find_chunks_filters_other_docs():
+    chunks = [
+        _make_chunk(document_id="a"),
+        _make_chunk(document_id="b"),
+        _make_chunk(document_id="c"),
+    ]
+
+    result = _find_chunks(chunks, "b")
+
+    assert len(result) == 1
+    assert result[0][1].document_id == "b"
+
+
+def test_find_chunks_no_match():
+    chunks = [_make_chunk(document_id="a")]
+
+    result = _find_chunks(chunks, "nonexistent")
+
+    assert result == []
+
+
+# --- _format_header ---
+
+
+def test_format_header_with_section_title():
+    chunk = _make_chunk(
+        section_title="Getting Started",
+        source_url="https://example.com",
+    )
+
+    result = _format_header(chunk, "src:guide.md", 3)
+
+    assert result == (
+        "Title: Getting Started\n"
+        "Source: https://example.com\n"
+        "Document ID: src:guide.md\n"
+        "Sections: 3"
+    )
+
+
+def test_format_header_fallback_to_file_path():
+    chunk = _make_chunk(section_title=None, file_path="docs/intro.md")
+
+    result = _format_header(chunk, "src:intro.md", 1)
+
+    assert "Title: docs/intro.md" in result
+
+
+def test_format_header_fallback_to_document_id():
+    chunk = _make_chunk(section_title=None, file_path=None)
+
+    result = _format_header(chunk, "src:doc.md", 1)
+
+    assert "Title: src:doc.md" in result
+
+
+# --- _format_sections ---
+
+
+def test_format_sections_concatenates_with_separator():
+    chunks = [
+        _make_chunk(chunk_index=0, content="First section"),
+        _make_chunk(chunk_index=1, content="Second section"),
+    ]
+
+    result = _format_sections(chunks)
+
+    assert result == "First section\n\nSecond section"
+
+
+def test_format_sections_sorts_by_chunk_index():
+    chunks = [
+        _make_chunk(chunk_index=2, content="Third"),
+        _make_chunk(chunk_index=0, content="First"),
+        _make_chunk(chunk_index=1, content="Second"),
+    ]
+
+    result = _format_sections(chunks)
+
+    assert result == "First\n\nSecond\n\nThird"
+
+
+def test_format_sections_single_chunk():
+    chunks = [_make_chunk(chunk_index=0, content="Only content")]
+
+    result = _format_sections(chunks)
+
+    assert result == "Only content"
+
+
+# --- get_document ---
+
+
+def test_get_document_returns_all_chunks():
+    embeddings = _make_embeddings(3)
+    chunks = [
+        _make_chunk(document_id="doc:file.md", chunk_index=i, content=f"Section {i}")
+        for i in range(3)
+    ]
+    index = faiss.IndexFlatIP(384)
+    index.add(embeddings)
+
+    app = AppContext(index=index, metadata=chunks, model=_mock_model())
+    ctx = _make_ctx(app)
+
+    result = asyncio.run(get_document("doc:file.md", ctx=ctx))
+
+    assert "Section 0" in result
+    assert "Section 1" in result
+    assert "Section 2" in result
+    assert result.index("Section 0") < result.index("Section 1") < result.index("Section 2")
+
+
+def test_get_document_not_found():
+    index = faiss.IndexFlatIP(384)
+    app = AppContext(index=index, metadata=[], model=_mock_model())
+    ctx = _make_ctx(app)
+
+    result = asyncio.run(get_document("nonexistent", ctx=ctx))
+
+    assert "not found" in result.lower()
+    assert "nonexistent" in result
+
+
+def test_get_document_empty_document_id():
+    index = faiss.IndexFlatIP(384)
+    app = AppContext(index=index, metadata=[], model=_mock_model())
+    ctx = _make_ctx(app)
+
+    result = asyncio.run(get_document("", ctx=ctx))
+
+    assert isinstance(result, str)
+    assert "non-empty" in result.lower()
+
+
+def test_get_document_whitespace_document_id():
+    index = faiss.IndexFlatIP(384)
+    app = AppContext(index=index, metadata=[], model=_mock_model())
+    ctx = _make_ctx(app)
+
+    result = asyncio.run(get_document("   ", ctx=ctx))
+
+    assert isinstance(result, str)
+    assert "non-empty" in result.lower()
+
+
+def test_get_document_metadata_in_header():
+    embeddings = _make_embeddings(1)
+    chunks = [
+        _make_chunk(
+            document_id="src:guide.md",
+            section_title="Getting Started",
+            source_url="https://example.com/guide",
+        )
+    ]
+    index = faiss.IndexFlatIP(384)
+    index.add(embeddings)
+
+    app = AppContext(index=index, metadata=chunks, model=_mock_model())
+    ctx = _make_ctx(app)
+
+    result = asyncio.run(get_document("src:guide.md", ctx=ctx))
+
+    assert "Title: Getting Started" in result
+    assert "Source: https://example.com/guide" in result
+    assert "Document ID: src:guide.md" in result
+    assert "Sections: 1" in result
+
+
+def test_get_document_title_fallback_to_file_path():
+    embeddings = _make_embeddings(1)
+    chunks = [_make_chunk(section_title=None, file_path="docs/intro.md")]
+    index = faiss.IndexFlatIP(384)
+    index.add(embeddings)
+
+    app = AppContext(index=index, metadata=chunks, model=_mock_model())
+    ctx = _make_ctx(app)
+
+    result = asyncio.run(get_document("test-source:doc.md", ctx=ctx))
+
+    assert "Title: docs/intro.md" in result
+
+
+def test_get_document_title_fallback_to_document_id():
+    embeddings = _make_embeddings(1)
+    chunks = [_make_chunk(section_title=None, file_path=None)]
+    index = faiss.IndexFlatIP(384)
+    index.add(embeddings)
+
+    app = AppContext(index=index, metadata=chunks, model=_mock_model())
+    ctx = _make_ctx(app)
+
+    result = asyncio.run(get_document("test-source:doc.md", ctx=ctx))
+
+    assert "Title: test-source:doc.md" in result
+
+
+def test_get_document_single_chunk():
+    embeddings = _make_embeddings(1)
+    chunks = [_make_chunk(content="Only chunk content here.")]
+    index = faiss.IndexFlatIP(384)
+    index.add(embeddings)
+
+    app = AppContext(index=index, metadata=chunks, model=_mock_model())
+    ctx = _make_ctx(app)
+
+    result = asyncio.run(get_document("test-source:doc.md", ctx=ctx))
+
+    assert "Only chunk content here." in result
+
+
+def test_get_document_with_query_sorts_by_relevance():
+    embeddings = _make_embeddings(3)
+    chunks = [
+        _make_chunk(document_id="doc:f.md", chunk_index=i, content=f"Chunk {i}")
+        for i in range(3)
+    ]
+    index = faiss.IndexFlatIP(384)
+    index.add(embeddings)
+
+    app = AppContext(index=index, metadata=chunks, model=_mock_model())
+    ctx = _make_ctx(app)
+
+    result = asyncio.run(get_document("doc:f.md", query="test query", ctx=ctx))
+
+    assert "ranked by relevance" in result.lower()
+    assert "[Relevance:" in result
+    assert "Chunk 0" in result
+    assert "Chunk 1" in result
+    assert "Chunk 2" in result
+
+    import re
+
+    scores = [float(m) for m in re.findall(r"\[Relevance: ([\d.]+)\]", result)]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_get_document_with_query_single_chunk():
+    embeddings = _make_embeddings(1)
+    chunks = [_make_chunk(document_id="doc:f.md", content="Only section")]
+    index = faiss.IndexFlatIP(384)
+    index.add(embeddings)
+
+    app = AppContext(index=index, metadata=chunks, model=_mock_model())
+    ctx = _make_ctx(app)
+
+    result = asyncio.run(get_document("doc:f.md", query="test", ctx=ctx))
+
+    assert "[Relevance:" in result
+    assert "Only section" in result
+
+
+def test_get_document_with_query_whitespace_only_ignored():
+    embeddings = _make_embeddings(1)
+    chunks = [_make_chunk(content="Some content")]
+    index = faiss.IndexFlatIP(384)
+    index.add(embeddings)
+
+    app = AppContext(index=index, metadata=chunks, model=_mock_model())
+    ctx = _make_ctx(app)
+
+    result = asyncio.run(get_document("test-source:doc.md", query="   ", ctx=ctx))
+
+    assert "ranked by relevance" not in result.lower()
+    assert "[Relevance:" not in result
+
+
+def test_get_document_strips_document_id():
+    embeddings = _make_embeddings(1)
+    chunks = [_make_chunk(document_id="test-source:doc.md")]
+    index = faiss.IndexFlatIP(384)
+    index.add(embeddings)
+
+    app = AppContext(index=index, metadata=chunks, model=_mock_model())
+    ctx = _make_ctx(app)
+
+    result = asyncio.run(get_document("  test-source:doc.md  ", ctx=ctx))
+
+    assert "not found" not in result.lower()
+    assert "Hello world." in result
+    assert "Document ID: test-source:doc.md" in result
+
+
+def test_get_document_whitespace_padded_not_found():
+    index = faiss.IndexFlatIP(384)
+    app = AppContext(index=index, metadata=[], model=_mock_model())
+    ctx = _make_ctx(app)
+
+    result = asyncio.run(get_document("  nonexistent  ", ctx=ctx))
+
+    assert "Document not found: nonexistent" in result
+
+
 # --- server module ---
 
 
@@ -545,6 +859,14 @@ def test_mcp_has_search_knowledge_tool():
     tools = asyncio.run(mcp.list_tools())
     tool_names = [t.name for t in tools]
     assert "search_knowledge" in tool_names
+
+
+def test_mcp_has_get_document_tool():
+    from kod.server.server import mcp
+
+    tools = asyncio.run(mcp.list_tools())
+    tool_names = [t.name for t in tools]
+    assert "get_document" in tool_names
 
 
 # --- run_server ---
