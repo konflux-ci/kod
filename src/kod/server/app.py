@@ -38,10 +38,7 @@ def load_app_context(data_dir: Path, embedding_model: str) -> AppContext:
     metadata = read_chunks(metadata_path)
 
     if len(metadata) != index.ntotal:
-        msg = (
-            f"Metadata count ({len(metadata)}) does not match "
-            f"index vector count ({index.ntotal})"
-        )
+        msg = f"Metadata count ({len(metadata)}) does not match index vector count ({index.ntotal})"
         raise ValueError(msg)
 
     logger.info("Loading embedding model: %s", embedding_model)

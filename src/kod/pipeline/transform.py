@@ -113,5 +113,3 @@ def _get_section_title(chunk) -> str | None:
     if orig and orig[0].category == "Title":
         return orig[0].text
     return None
-
-

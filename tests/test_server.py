@@ -434,9 +434,7 @@ def test_search_multi_query_rrf():
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
     ctx = _make_ctx(app)
 
-    results = asyncio.run(
-        search_knowledge(["query one", "query two"], top_k=3, ctx=ctx)
-    )
+    results = asyncio.run(search_knowledge(["query one", "query two"], top_k=3, ctx=ctx))
 
     assert isinstance(results, list)
     assert len(results) <= 3
@@ -771,8 +769,7 @@ def test_get_document_single_chunk():
 def test_get_document_with_query_sorts_by_relevance():
     embeddings = _make_embeddings(3)
     chunks = [
-        _make_chunk(document_id="doc:f.md", chunk_index=i, content=f"Chunk {i}")
-        for i in range(3)
+        _make_chunk(document_id="doc:f.md", chunk_index=i, content=f"Chunk {i}") for i in range(3)
     ]
     index = faiss.IndexFlatIP(384)
     index.add(embeddings)
