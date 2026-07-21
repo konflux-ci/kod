@@ -36,7 +36,7 @@ def test_subcommand_help(runner, cmd):
 
 @pytest.mark.parametrize(
     "cmd",
-    ["transform", "embed", "index", "build-image"],
+    ["transform", "embed", "index"],
 )
 def test_subcommand_runs_with_config(runner, sample_config_yaml, cmd):
     result = runner.invoke(cli, ["--config", sample_config_yaml, cmd])
@@ -72,9 +72,7 @@ def test_serve_runs(mock_run, runner, tmp_path):
 
 @patch("kod.server.run_server")
 def test_serve_model_flag(mock_run, runner, tmp_path):
-    result = runner.invoke(
-        cli, ["serve", "--data-dir", str(tmp_path), "--model", "custom/model"]
-    )
+    result = runner.invoke(cli, ["serve", "--data-dir", str(tmp_path), "--model", "custom/model"])
     assert result.exit_code == 0
     mock_run.assert_called_once_with(
         data_dir=str(tmp_path),
@@ -91,10 +89,14 @@ def test_serve_tuning_flags(mock_run, runner, tmp_path):
         cli,
         [
             "serve",
-            "--data-dir", str(tmp_path),
-            "--rrf-k", "30",
-            "--max-queries", "3",
-            "--max-top-k", "10",
+            "--data-dir",
+            str(tmp_path),
+            "--rrf-k",
+            "30",
+            "--max-queries",
+            "3",
+            "--max-top-k",
+            "10",
         ],
     )
     assert result.exit_code == 0
@@ -105,6 +107,47 @@ def test_serve_tuning_flags(mock_run, runner, tmp_path):
         max_queries=3,
         max_top_k=10,
     )
+
+
+@patch("kod.pipeline.build_image.run_build_image")
+def test_build_image_runs(mock_build, runner):
+    result = runner.invoke(cli, ["build-image"])
+    assert result.exit_code == 0
+    mock_build.assert_called_once()
+
+
+@patch("kod.pipeline.build_image.run_build_image")
+def test_build_image_builder_flag(mock_build, runner):
+    result = runner.invoke(cli, ["build-image", "--builder", "docker"])
+    assert result.exit_code == 0
+    _, kwargs = mock_build.call_args
+    assert kwargs["builder"] == "docker"
+
+
+@patch("kod.pipeline.build_image.run_build_image")
+def test_build_image_tag_flag(mock_build, runner):
+    result = runner.invoke(cli, ["build-image", "-t", "myimg:v2"])
+    assert result.exit_code == 0
+    _, kwargs = mock_build.call_args
+    assert kwargs["tag"] == "myimg:v2"
+
+
+@patch("kod.pipeline.build_image.run_build_image")
+def test_build_image_containerfile_flag(mock_build, runner):
+    result = runner.invoke(cli, ["build-image", "--containerfile", "Custom.Dockerfile"])
+    assert result.exit_code == 0
+    _, kwargs = mock_build.call_args
+    assert kwargs["containerfile"] == "Custom.Dockerfile"
+
+
+@patch("kod.pipeline.build_image.run_build_image")
+def test_build_image_defaults(mock_build, runner):
+    runner.invoke(cli, ["build-image"])
+    _, kwargs = mock_build.call_args
+    assert kwargs["data_dir"] == "data"
+    assert kwargs["builder"] == "podman"
+    assert kwargs["tag"] == "kod:latest"
+    assert kwargs["containerfile"] == "Containerfile"
 
 
 def test_missing_config_fails(runner):

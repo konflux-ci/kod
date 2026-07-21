@@ -32,6 +32,37 @@ Run the full pipeline:
 uv run kod --config config.example.yaml pipeline
 ```
 
+## Container Image
+
+After running the ETL pipeline, build the container image:
+
+```
+uv run kod build-image
+```
+
+The `build-image` command is independent of `--config` — it only needs the
+FAISS index artifacts in the data directory. Options:
+
+```
+uv run kod build-image --builder docker          # use docker instead of podman
+uv run kod build-image -t kod:dev                # custom image tag
+uv run kod build-image --data-dir out/data       # custom data directory
+uv run kod build-image --containerfile Dockerfile # custom Containerfile
+```
+
+Run the image:
+
+```
+podman run -p 8000:8000 kod:latest
+```
+
+Test with the MCP client:
+
+```
+uv run python scripts/mcp_client.py --list-tools
+uv run python scripts/mcp_client.py "what is konflux?"
+```
+
 ## CLI
 
 ```

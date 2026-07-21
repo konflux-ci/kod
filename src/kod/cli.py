@@ -88,12 +88,40 @@ def index(ctx: click.Context) -> None:
 
 
 @cli.command("build-image")
-@click.pass_context
-def build_image(ctx: click.Context) -> None:
+@click.option(
+    "--data-dir",
+    envvar="KOD_DATA_DIR",
+    default="data",
+    show_default=True,
+    help="Path to the data directory containing the FAISS index.",
+)
+@click.option(
+    "--builder",
+    envvar="KOD_BUILDER",
+    default="podman",
+    show_default=True,
+    help="Container build binary (e.g. podman, docker).",
+)
+@click.option(
+    "--tag",
+    "-t",
+    envvar="KOD_IMAGE_TAG",
+    default="kod:latest",
+    show_default=True,
+    help="Image tag for the built container.",
+)
+@click.option(
+    "--containerfile",
+    envvar="KOD_CONTAINERFILE",
+    default="Containerfile",
+    show_default=True,
+    help="Path to the Containerfile.",
+)
+def build_image(data_dir: str, builder: str, tag: str, containerfile: str) -> None:
     """Build the container image with the pre-built index."""
     from kod.pipeline.build_image import run_build_image
 
-    run_build_image(_get_config(ctx))
+    run_build_image(data_dir=data_dir, builder=builder, tag=tag, containerfile=containerfile)
 
 
 @cli.command()
