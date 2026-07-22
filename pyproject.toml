@@ -50,6 +50,9 @@ output = "coverage/coverage.xml"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: end-to-end tests using real embeddings (slower, requires model download)",
+]
 addopts = [
     "-r", "a",
     "--verbose",
@@ -58,6 +61,7 @@ addopts = [
     "--cov", "tests",
     "--cov-report", "html",
     "--cov-report", "term-missing:skip-covered",
+    "--cov-fail-under", "95",
     "--durations-min", "1",
     "--durations", "10",
     "--color", "yes",

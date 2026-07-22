@@ -9,6 +9,8 @@ import faiss
 import numpy as np
 import pytest
 
+from conftest import make_ctx
+
 from kod.models import DocumentChunk
 from kod.pipeline.io import write_chunks
 from kod.server import tools as _tools_module
@@ -80,13 +82,6 @@ def _mock_model(dim=384):
 
     model.query_embed.side_effect = fake_query_embed
     return model
-
-
-def _make_ctx(app):
-    """Build a minimal FastMCP-compatible context mock."""
-    ctx = MagicMock()
-    ctx.request_context.lifespan_context = {"app": app}
-    return ctx
 
 
 # --- load_app_context ---
@@ -205,7 +200,7 @@ def test_configure_max_queries_affects_search():
 
     model = _mock_model()
     app = AppContext(index=index, metadata=chunks, model=model)
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     configure(max_queries=2)
     asyncio.run(search_knowledge([f"q{i}" for i in range(4)], top_k=3, ctx=ctx))
@@ -221,7 +216,7 @@ def test_configure_max_top_k_affects_search():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     configure(max_top_k=3)
     results = asyncio.run(search_knowledge("test", top_k=10, ctx=ctx))
@@ -361,7 +356,7 @@ def test_search_single_query():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     results = asyncio.run(search_knowledge("test query", top_k=3, ctx=ctx))
 
@@ -385,7 +380,7 @@ def test_search_result_fields():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     results = asyncio.run(search_knowledge("test", top_k=3, ctx=ctx))
 
@@ -404,7 +399,7 @@ def test_search_title_fallback_to_file_path():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     results = asyncio.run(search_knowledge("test", ctx=ctx))
 
@@ -418,7 +413,7 @@ def test_search_title_fallback_to_document_id():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     results = asyncio.run(search_knowledge("test", ctx=ctx))
 
@@ -432,7 +427,7 @@ def test_search_multi_query_rrf():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     results = asyncio.run(search_knowledge(["query one", "query two"], top_k=3, ctx=ctx))
 
@@ -447,7 +442,7 @@ def test_search_top_k_respected():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     results = asyncio.run(search_knowledge("test", top_k=2, ctx=ctx))
 
@@ -461,7 +456,7 @@ def test_search_top_k_clamped_high():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     results = asyncio.run(search_knowledge("test", top_k=100, ctx=ctx))
 
@@ -475,7 +470,7 @@ def test_search_top_k_zero_clamped_to_one():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     results = asyncio.run(search_knowledge("test", top_k=0, ctx=ctx))
 
@@ -489,7 +484,7 @@ def test_search_top_k_negative_clamped_to_one():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     results = asyncio.run(search_knowledge("test", top_k=-1, ctx=ctx))
 
@@ -504,7 +499,7 @@ def test_search_max_queries_truncation():
 
     model = _mock_model()
     app = AppContext(index=index, metadata=chunks, model=model)
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     queries = [f"query {i}" for i in range(7)]
     asyncio.run(search_knowledge(queries, top_k=3, ctx=ctx))
@@ -520,7 +515,7 @@ def test_search_empty_query():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     result = asyncio.run(search_knowledge("", ctx=ctx))
 
@@ -531,7 +526,7 @@ def test_search_empty_index():
     index = faiss.IndexFlatIP(384)
 
     app = AppContext(index=index, metadata=[], model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     results = asyncio.run(search_knowledge("test", ctx=ctx))
 
@@ -658,7 +653,7 @@ def test_get_document_returns_all_chunks():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     result = asyncio.run(get_document("doc:file.md", ctx=ctx))
 
@@ -671,7 +666,7 @@ def test_get_document_returns_all_chunks():
 def test_get_document_not_found():
     index = faiss.IndexFlatIP(384)
     app = AppContext(index=index, metadata=[], model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     result = asyncio.run(get_document("nonexistent", ctx=ctx))
 
@@ -682,7 +677,7 @@ def test_get_document_not_found():
 def test_get_document_empty_document_id():
     index = faiss.IndexFlatIP(384)
     app = AppContext(index=index, metadata=[], model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     result = asyncio.run(get_document("", ctx=ctx))
 
@@ -693,7 +688,7 @@ def test_get_document_empty_document_id():
 def test_get_document_whitespace_document_id():
     index = faiss.IndexFlatIP(384)
     app = AppContext(index=index, metadata=[], model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     result = asyncio.run(get_document("   ", ctx=ctx))
 
@@ -714,7 +709,7 @@ def test_get_document_metadata_in_header():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     result = asyncio.run(get_document("src:guide.md", ctx=ctx))
 
@@ -731,7 +726,7 @@ def test_get_document_title_fallback_to_file_path():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     result = asyncio.run(get_document("test-source:doc.md", ctx=ctx))
 
@@ -745,7 +740,7 @@ def test_get_document_title_fallback_to_document_id():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     result = asyncio.run(get_document("test-source:doc.md", ctx=ctx))
 
@@ -759,7 +754,7 @@ def test_get_document_single_chunk():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     result = asyncio.run(get_document("test-source:doc.md", ctx=ctx))
 
@@ -775,7 +770,7 @@ def test_get_document_with_query_sorts_by_relevance():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     result = asyncio.run(get_document("doc:f.md", query="test query", ctx=ctx))
 
@@ -798,7 +793,7 @@ def test_get_document_with_query_single_chunk():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     result = asyncio.run(get_document("doc:f.md", query="test", ctx=ctx))
 
@@ -813,7 +808,7 @@ def test_get_document_with_query_whitespace_only_ignored():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     result = asyncio.run(get_document("test-source:doc.md", query="   ", ctx=ctx))
 
@@ -828,7 +823,7 @@ def test_get_document_strips_document_id():
     index.add(embeddings)
 
     app = AppContext(index=index, metadata=chunks, model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     result = asyncio.run(get_document("  test-source:doc.md  ", ctx=ctx))
 
@@ -840,7 +835,7 @@ def test_get_document_strips_document_id():
 def test_get_document_whitespace_padded_not_found():
     index = faiss.IndexFlatIP(384)
     app = AppContext(index=index, metadata=[], model=_mock_model())
-    ctx = _make_ctx(app)
+    ctx = make_ctx(app)
 
     result = asyncio.run(get_document("  nonexistent  ", ctx=ctx))
 

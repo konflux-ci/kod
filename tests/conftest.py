@@ -2,6 +2,8 @@
 
 import textwrap
 
+from unittest.mock import MagicMock
+
 import pytest
 
 
@@ -33,3 +35,10 @@ def minimal_config_yaml(tmp_path):
     """)
     )
     return str(config_file)
+
+
+def make_ctx(app):
+    """Build a minimal FastMCP-compatible context mock."""
+    ctx = MagicMock()
+    ctx.request_context.lifespan_context = {"app": app}
+    return ctx
