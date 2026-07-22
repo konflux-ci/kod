@@ -44,8 +44,12 @@ mcp.tool()(get_document)
 def run_server(
     data_dir: str = _DEFAULT_DATA_DIR,
     embedding_model: str = _DEFAULT_EMBEDDING_MODEL,
+    # Reciprocal Rank Fusion constant — higher values flatten score differences
+    # across ranked lists, lower values amplify top-ranked results.
     rrf_k: int = 60,
+    # Maximum number of queries allowed per search_knowledge call (multi-query).
     max_queries: int = 5,
+    # Upper bound on the top_k parameter clients can request from search_knowledge.
     max_top_k: int = 20,
 ) -> None:
     """Start the MCP server on port 8000 with streamable-http transport."""
