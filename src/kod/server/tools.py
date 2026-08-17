@@ -8,7 +8,10 @@ from fastmcp import Context
 
 from kod.models import DocumentChunk
 from kod.server.app import AppContext
+from kod.server.app import apply_source_limit
 from kod.server.app import embed_queries
+from kod.server.app import faiss_k
+from kod.server.app import search_index
 
 
 logger = logging.getLogger(__name__)
@@ -62,6 +65,7 @@ def _rrf_merge(
     ranked_lists: list[list[tuple[int, float]]],
     metadata: list[DocumentChunk],
     top_k: int,
+    max_per_source: int = 0,
 ) -> list[tuple[int, float]]:
     """Merge multiple ranked lists via Reciprocal Rank Fusion.
 
@@ -86,7 +90,7 @@ def _rrf_merge(
 
     merged = [(best_idx[doc_id], score) for doc_id, score in scores.items()]
     merged.sort(key=lambda x: x[1], reverse=True)
-    return merged[:top_k]
+    return apply_source_limit(merged, metadata, top_k, max_per_source)
 
 
 def _format_result(chunk: DocumentChunk, score: float) -> dict:
@@ -103,6 +107,7 @@ def _format_result(chunk: DocumentChunk, score: float) -> dict:
 async def search_knowledge(
     query: str | list[str],
     top_k: int = 5,
+    max_per_source: int = 0,
     *,
     ctx: Context,
 ) -> list[dict] | str:
@@ -111,6 +116,9 @@ async def search_knowledge(
     Pass a single query string or a list of up to 5 query reformulations
     for better coverage. Multiple queries are merged via reciprocal rank
     fusion so documents matching across phrasings rank higher.
+
+    Set max_per_source to limit results from any single documentation
+    source, ensuring diversity across sources (0 = no limit).
     """
     normalized = _normalize_queries(query)
     if isinstance(normalized, str):
@@ -119,26 +127,25 @@ async def search_knowledge(
 
     queries = normalized[:_max_queries]
     top_k = max(1, min(top_k, _max_top_k))
+    max_per_source = max(0, min(max_per_source, _max_top_k))
 
     app: AppContext = ctx.request_context.lifespan_context["app"]
 
     if app.index.ntotal == 0:
         return []
 
-    candidates = min(top_k * 2, app.index.ntotal)
-
     embeddings = embed_queries(app.model, queries)
-    distances, indices = app.index.search(embeddings, k=candidates)
 
-    ranked_lists = [
-        list(zip(indices[i].tolist(), distances[i].tolist(), strict=True))
-        for i in range(len(queries))
-    ]
-
-    if len(ranked_lists) == 1:
-        results = [(idx, score) for idx, score in ranked_lists[0] if idx >= 0][:top_k]
+    if len(queries) == 1:
+        results = search_index(app, embeddings, top_k, max_per_source)
     else:
-        results = _rrf_merge(ranked_lists, app.metadata, top_k)
+        k = faiss_k(app.index.ntotal, top_k, max_per_source)
+        distances, indices = app.index.search(embeddings, k=k)
+        ranked_lists = [
+            list(zip(indices[i].tolist(), distances[i].tolist(), strict=True))
+            for i in range(len(queries))
+        ]
+        results = _rrf_merge(ranked_lists, app.metadata, top_k, max_per_source)
 
     return [_format_result(app.metadata[idx], score) for idx, score in results]
 

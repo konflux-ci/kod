@@ -2,7 +2,7 @@
 
 Usage:
     uv run python scripts/mcp_client.py "your query here"
-    uv run python scripts/mcp_client.py -k 5 "your query here"
+    uv run python scripts/mcp_client.py -k 5 --max-per-source 2 "your query here"
     uv run python scripts/mcp_client.py --url http://localhost:8000/mcp "your query"
     uv run python scripts/mcp_client.py --list-tools
     uv run python scripts/mcp_client.py --get-document "source:file.md"
@@ -22,6 +22,7 @@ async def main():
     parser.add_argument("-k", type=int, default=5, help="Number of results (default: 5)")
     parser.add_argument("--url", default="http://127.0.0.1:8000/mcp", help="MCP server URL")
     parser.add_argument("--list-tools", action="store_true", help="List available tools and exit")
+    parser.add_argument("--max-per-source", type=int, default=0, help="Max results per source (0=no limit)")
     parser.add_argument("--get-document", metavar="DOC_ID", help="Retrieve a document by ID")
     args = parser.parse_args()
 
@@ -45,7 +46,10 @@ async def main():
             parser.error("query is required (unless using --list-tools or --get-document)")
 
         query = args.query if len(args.query) > 1 else args.query[0]
-        result = await client.call_tool("search_knowledge", {"query": query, "top_k": args.k})
+        params = {"query": query, "top_k": args.k}
+        if args.max_per_source > 0:
+            params["max_per_source"] = args.max_per_source
+        result = await client.call_tool("search_knowledge", params)
 
         for block in result.content:
             data = json.loads(block.text)

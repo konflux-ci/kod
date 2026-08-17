@@ -15,8 +15,11 @@ from kod.models import DocumentChunk
 from kod.pipeline.io import write_chunks
 from kod.server import tools as _tools_module
 from kod.server.app import AppContext
+from kod.server.app import apply_source_limit
 from kod.server.app import embed_queries
+from kod.server.app import faiss_k
 from kod.server.app import load_app_context
+from kod.server.app import search_index
 from kod.server.tools import _find_chunks
 from kod.server.tools import _format_header
 from kod.server.tools import _format_sections
@@ -82,6 +85,16 @@ def _mock_model(dim=384):
 
     model.query_embed.side_effect = fake_query_embed
     return model
+
+
+def _make_app(n, dim=384):
+    """Create an AppContext with n vectors for testing."""
+    index = faiss.IndexFlatIP(dim)
+    if n > 0:
+        embeddings = _make_embeddings(n, dim)
+        index.add(embeddings)
+    chunks = [_make_chunk(document_id=f"doc-{i}", chunk_index=i) for i in range(n)]
+    return AppContext(index=index, metadata=chunks, model=_mock_model(dim))
 
 
 # --- load_app_context ---
@@ -153,6 +166,167 @@ def test_embed_queries():
     assert result.shape == (2, 384)
     assert result.dtype == np.float32
     model.query_embed.assert_called_once_with(["hello", "world"])
+
+
+# --- search_index ---
+
+
+def test_search_index_returns_results():
+    app = _make_app(5)
+    query_vec = _make_embeddings(1)[:1]
+    results = search_index(app, query_vec, top_k=3)
+    assert len(results) == 3
+    assert all(isinstance(idx, int) and isinstance(score, float) for idx, score in results)
+
+
+def test_search_index_empty():
+    app = _make_app(0)
+    query_vec = np.random.rand(1, 384).astype(np.float32)
+    results = search_index(app, query_vec, top_k=5)
+    assert results == []
+
+
+def test_search_index_respects_top_k():
+    app = _make_app(10)
+    query_vec = _make_embeddings(1)[:1]
+    results = search_index(app, query_vec, top_k=2)
+    assert len(results) == 2
+
+
+def test_search_index_max_per_source():
+    dim = 4
+    index = faiss.IndexFlatIP(dim)
+    vecs = np.array(
+        [[1, 0, 0, 0], [0.9, 0.1, 0, 0], [0, 1, 0, 0], [0, 0.9, 0.1, 0]],
+        dtype=np.float32,
+    )
+    index.add(vecs)
+    chunks = [
+        _make_chunk(source_name="src-a", document_id="a:0"),
+        _make_chunk(source_name="src-a", document_id="a:1"),
+        _make_chunk(source_name="src-b", document_id="b:0"),
+        _make_chunk(source_name="src-b", document_id="b:1"),
+    ]
+    model = MagicMock()
+    model.query_embed.return_value = [np.array([1, 0, 0, 0], dtype=np.float32)]
+    app = AppContext(index=index, metadata=chunks, model=model)
+    query_vec = embed_queries(model, ["test"])
+
+    results = search_index(app, query_vec, top_k=4, max_per_source=1)
+
+    assert len(results) == 2
+    sources = [chunks[idx].source_name for idx, _ in results]
+    assert sources.count("src-a") == 1
+    assert sources.count("src-b") == 1
+
+
+def test_search_index_max_per_source_fills_top_k():
+    dim = 4
+    n_dominant = 15
+    n_other = 5
+    vecs = []
+    chunks = []
+    for i in range(n_dominant):
+        v = np.array([1.0 - i * 0.01, 0.01, 0, 0], dtype=np.float32)
+        vecs.append(v / np.linalg.norm(v))
+        chunks.append(_make_chunk(source_name="src-a", document_id=f"a:{i}"))
+    for i in range(n_other):
+        v = np.array([0.01 * (i + 1), 1.0, 0, 0], dtype=np.float32)
+        vecs.append(v / np.linalg.norm(v))
+        chunks.append(_make_chunk(source_name=f"src-{chr(98 + i)}", document_id=f"{chr(98 + i)}:0"))
+    index = faiss.IndexFlatIP(dim)
+    index.add(np.array(vecs, dtype=np.float32))
+    model = MagicMock()
+    model.query_embed.return_value = [np.array([1, 0, 0, 0], dtype=np.float32)]
+    app = AppContext(index=index, metadata=chunks, model=model)
+    query_vec = embed_queries(model, ["test"])
+
+    results = search_index(app, query_vec, top_k=5, max_per_source=1)
+
+    assert len(results) == 5
+    sources = {chunks[idx].source_name for idx, _ in results}
+    assert len(sources) == 5
+
+
+def test_search_index_max_per_source_zero_no_limit():
+    app = _make_app(5)
+    query_vec = _make_embeddings(1)[:1]
+
+    results_default = search_index(app, query_vec, top_k=5)
+    results_zero = search_index(app, query_vec, top_k=5, max_per_source=0)
+
+    assert len(results_default) == len(results_zero)
+
+
+def test_search_index_skips_negative_indices():
+    app = _make_app(2)
+    query_vec = _make_embeddings(1)[:1]
+    with patch.object(app.index, "search") as mock_search:
+        mock_search.return_value = (
+            np.array([[0.9, -1.0]], dtype=np.float32),
+            np.array([[0, -1]], dtype=np.int64),
+        )
+        results = search_index(app, query_vec, top_k=5)
+    assert len(results) == 1
+    assert results[0][0] == 0
+
+
+# --- faiss_k ---
+
+
+def test_faiss_k_with_source_limit():
+    assert faiss_k(1000, 5, max_per_source=1) == 1000
+
+
+def test_faiss_k_without_source_limit():
+    assert faiss_k(1000, 5, max_per_source=0) == 10
+
+
+def test_faiss_k_clamps_to_ntotal():
+    assert faiss_k(3, 5, max_per_source=0) == 3
+
+
+# --- apply_source_limit ---
+
+
+def test_apply_source_limit_caps_per_source():
+    metadata = [
+        _make_chunk(source_name="a"),
+        _make_chunk(source_name="a"),
+        _make_chunk(source_name="b"),
+    ]
+    candidates = [(0, 0.9), (1, 0.8), (2, 0.7)]
+
+    results = apply_source_limit(candidates, metadata, top_k=3, max_per_source=1)
+
+    assert len(results) == 2
+    sources = [metadata[idx].source_name for idx, _ in results]
+    assert sources.count("a") == 1
+    assert sources.count("b") == 1
+
+
+def test_apply_source_limit_zero_means_no_limit():
+    metadata = [_make_chunk(source_name="a") for _ in range(3)]
+    candidates = [(i, 0.9 - i * 0.1) for i in range(3)]
+
+    results = apply_source_limit(candidates, metadata, top_k=3, max_per_source=0)
+
+    assert len(results) == 3
+
+
+def test_apply_source_limit_empty_candidates():
+    metadata = [_make_chunk(source_name="a")]
+
+    assert apply_source_limit([], metadata, top_k=5, max_per_source=1) == []
+
+
+def test_apply_source_limit_respects_top_k():
+    metadata = [_make_chunk(source_name=f"s{i}") for i in range(5)]
+    candidates = [(i, 0.9 - i * 0.1) for i in range(5)]
+
+    results = apply_source_limit(candidates, metadata, top_k=2, max_per_source=1)
+
+    assert len(results) == 2
 
 
 # --- configure ---
@@ -338,6 +512,44 @@ def test_rrf_skips_negative_indices():
     assert result[0][0] == 0
 
 
+def test_rrf_merge_max_per_source():
+    metadata = [
+        _make_chunk(document_id="a:0", source_name="src-a"),
+        _make_chunk(document_id="a:1", source_name="src-a"),
+        _make_chunk(document_id="b:0", source_name="src-b"),
+    ]
+    ranked_lists = [[(0, 0.9), (1, 0.8), (2, 0.7)]]
+
+    result = _rrf_merge(ranked_lists, metadata, top_k=3, max_per_source=1)
+
+    sources = [metadata[idx].source_name for idx, _ in result]
+    assert sources.count("src-a") == 1
+    assert sources.count("src-b") == 1
+    assert len(result) == 2
+
+
+def test_rrf_merge_max_per_source_respects_top_k():
+    metadata = [_make_chunk(document_id=f"s{i}:0", source_name=f"src-{i}") for i in range(5)]
+    ranked_lists = [[(i, 0.9 - i * 0.1) for i in range(5)]]
+
+    result = _rrf_merge(ranked_lists, metadata, top_k=2, max_per_source=1)
+
+    assert len(result) == 2
+
+
+def test_rrf_merge_max_per_source_zero_no_limit():
+    metadata = [
+        _make_chunk(document_id="a:0", source_name="src-a"),
+        _make_chunk(document_id="a:1", source_name="src-a"),
+        _make_chunk(document_id="b:0", source_name="src-b"),
+    ]
+    ranked_lists = [[(0, 0.9), (1, 0.8), (2, 0.7)]]
+
+    result = _rrf_merge(ranked_lists, metadata, top_k=3, max_per_source=0)
+
+    assert len(result) == 3
+
+
 def test_rrf_empty_ranked_lists():
     metadata = [_make_chunk(document_id="a")]
 
@@ -506,6 +718,137 @@ def test_search_max_queries_truncation():
 
     embedded = model.query_embed.call_args[0][0]
     assert len(embedded) == 5
+
+
+def test_search_knowledge_max_per_source():
+    dim = 4
+    index = faiss.IndexFlatIP(dim)
+    vecs = np.array(
+        [[1, 0, 0, 0], [0.9, 0.1, 0, 0], [0, 1, 0, 0], [0, 0.9, 0.1, 0]],
+        dtype=np.float32,
+    )
+    index.add(vecs)
+    chunks = [
+        _make_chunk(source_name="src-a", document_id="a:0"),
+        _make_chunk(source_name="src-a", document_id="a:1"),
+        _make_chunk(source_name="src-b", document_id="b:0"),
+        _make_chunk(source_name="src-b", document_id="b:1"),
+    ]
+    model = MagicMock()
+    model.query_embed.return_value = [np.array([1, 0, 0, 0], dtype=np.float32)]
+    app = AppContext(index=index, metadata=chunks, model=model)
+    ctx = make_ctx(app)
+
+    results = asyncio.run(search_knowledge("test", top_k=4, max_per_source=1, ctx=ctx))
+
+    sources = [r["document_id"].split(":")[0] for r in results]
+    assert sources.count("a") <= 1
+    assert sources.count("b") <= 1
+
+
+def test_search_knowledge_multi_query_max_per_source():
+    dim = 4
+    index = faiss.IndexFlatIP(dim)
+    vecs = np.array(
+        [[1, 0, 0, 0], [0.9, 0.1, 0, 0], [0, 1, 0, 0], [0, 0.9, 0.1, 0]],
+        dtype=np.float32,
+    )
+    index.add(vecs)
+    chunks = [
+        _make_chunk(source_name="src-a", document_id="a:0"),
+        _make_chunk(source_name="src-a", document_id="a:1"),
+        _make_chunk(source_name="src-b", document_id="b:0"),
+        _make_chunk(source_name="src-b", document_id="b:1"),
+    ]
+    model = MagicMock()
+
+    def fake_multi_embed(texts):
+        rng = np.random.default_rng(42)
+        for _ in texts:
+            vec = rng.random(dim, dtype=np.float32)
+            vec /= np.linalg.norm(vec)
+            yield vec
+
+    model.query_embed.side_effect = fake_multi_embed
+    app = AppContext(index=index, metadata=chunks, model=model)
+    ctx = make_ctx(app)
+
+    results = asyncio.run(
+        search_knowledge(["query one", "query two"], top_k=4, max_per_source=1, ctx=ctx)
+    )
+
+    sources = [r["document_id"].split(":")[0] for r in results]
+    assert sources.count("a") <= 1
+    assert sources.count("b") <= 1
+    assert len(results) >= 1
+
+
+def test_search_knowledge_multi_query_max_per_source_fills_top_k():
+    dim = 4
+    n_dominant = 15
+    n_other = 5
+    vecs = []
+    chunks = []
+    for i in range(n_dominant):
+        v = np.array([1.0 - i * 0.01, 0.01, 0, 0], dtype=np.float32)
+        vecs.append(v / np.linalg.norm(v))
+        chunks.append(_make_chunk(source_name="src-a", document_id=f"a:{i}"))
+    for i in range(n_other):
+        v = np.array([0.01 * (i + 1), 1.0, 0, 0], dtype=np.float32)
+        vecs.append(v / np.linalg.norm(v))
+        chunks.append(
+            _make_chunk(
+                source_name=f"src-{chr(98 + i)}",
+                document_id=f"{chr(98 + i)}:0",
+            )
+        )
+    index = faiss.IndexFlatIP(dim)
+    index.add(np.array(vecs, dtype=np.float32))
+    model = MagicMock()
+
+    def fake_multi_embed(texts):
+        for _ in texts:
+            v = np.array([1, 0, 0, 0], dtype=np.float32)
+            yield v / np.linalg.norm(v)
+
+    model.query_embed.side_effect = fake_multi_embed
+    app = AppContext(index=index, metadata=chunks, model=model)
+    ctx = make_ctx(app)
+
+    results = asyncio.run(
+        search_knowledge(
+            ["query one", "query two"],
+            top_k=5,
+            max_per_source=1,
+            ctx=ctx,
+        )
+    )
+
+    assert len(results) == 5
+    sources = {r["document_id"].split(":")[0] for r in results}
+    assert len(sources) == 5
+
+
+def test_search_knowledge_negative_max_per_source_clamped():
+    app = _make_app(5)
+    ctx = make_ctx(app)
+
+    results_zero = asyncio.run(search_knowledge("test", max_per_source=0, ctx=ctx))
+    results_neg = asyncio.run(search_knowledge("test", max_per_source=-5, ctx=ctx))
+
+    assert len(results_zero) == len(results_neg)
+
+
+def test_search_knowledge_max_per_source_capped_to_max_top_k():
+    app = _make_app(5)
+    ctx = make_ctx(app)
+
+    results_capped = asyncio.run(search_knowledge("test", max_per_source=9999, ctx=ctx))
+    results_max = asyncio.run(
+        search_knowledge("test", max_per_source=_tools_module._max_top_k, ctx=ctx)
+    )
+
+    assert len(results_capped) == len(results_max)
 
 
 def test_search_empty_query():

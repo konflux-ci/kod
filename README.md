@@ -61,6 +61,7 @@ Test with the MCP client:
 ```
 uv run python scripts/mcp_client.py --list-tools
 uv run python scripts/mcp_client.py "what is konflux?"
+uv run python scripts/mcp_client.py --max-per-source 2 "why konflux?"
 ```
 
 ## CLI
