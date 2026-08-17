@@ -14,9 +14,11 @@ from urllib.error import URLError
 from urllib.parse import urldefrag
 from urllib.parse import urljoin
 from urllib.parse import urlparse
+from urllib.request import Request
 from urllib.request import urlopen
 
 import pydowndoc
+import yaml
 
 from unstructured.partition.auto import partition
 from unstructured.partition.html import partition_html
@@ -31,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 def run_extract(config: KodConfig) -> None:
     """Extract documents from all configured sources."""
+    _antora_cache.clear()
     extracted_dir = config.data_dir / "extracted"
     extracted_dir.mkdir(parents=True, exist_ok=True)
 
@@ -82,7 +85,7 @@ def _extract_git_source(
     for file_path in _find_doc_files(
         clone_dir, doc_extensions, source.include_paths, source.exclude_paths
     ):
-        elements = _partition_file(file_path)
+        elements = _partition_file(file_path, clone_dir)
         element_dicts = [e.to_dict() for e in elements]
         if not _has_text(element_dicts):
             continue
@@ -157,7 +160,8 @@ def _discover_urls_from_sitemap(base_url: str, max_pages: int) -> list[str] | No
     base_path = parsed.path
     sitemap_url = f"{parsed.scheme}://{parsed.netloc}/sitemap.xml"
     try:
-        with urlopen(sitemap_url, timeout=30) as resp:  # noqa: S310
+        req = Request(sitemap_url, headers={"User-Agent": "KOD/1.0"})  # noqa: S310
+        with urlopen(req, timeout=30) as resp:  # noqa: S310
             data = resp.read()
     except (URLError, OSError):
         return None
@@ -199,7 +203,8 @@ def _discover_urls_by_crawling(seed_url: str, max_pages: int) -> list[tuple[str,
             continue
         visited.add(url)
         try:
-            with urlopen(url, timeout=30) as resp:  # noqa: S310
+            req = Request(url, headers={"User-Agent": "KOD/1.0"})  # noqa: S310
+            with urlopen(req, timeout=30) as resp:  # noqa: S310
                 html = resp.read().decode("utf-8", errors="replace")
         except (URLError, OSError):
             logger.warning("[extract] Failed to fetch %s, skipping", url)
@@ -312,7 +317,7 @@ def _find_doc_files(
     return sorted(files)
 
 
-def _partition_file(file_path: Path) -> list:
+def _partition_file(file_path: Path, clone_dir: Path | None = None) -> list:
     """Partition a file, converting AsciiDoc to Markdown first if needed.
 
     Unstructured's partitioner misclassifies AsciiDoc markup: ``==`` headers
@@ -322,11 +327,44 @@ def _partition_file(file_path: Path) -> list:
     correctly.
     """
     if file_path.suffix.lower() == ".adoc":
-        file_path = _convert_adoc_to_md(file_path)
+        file_path = _convert_adoc_to_md(file_path, clone_dir)
     return partition(filename=str(file_path), strategy="fast")
 
 
-def _convert_adoc_to_md(file_path: Path) -> Path:
+_antora_cache: dict[Path, dict[str, str]] = {}
+
+
+def _load_antora_attributes(file_path: Path, clone_dir: Path) -> dict[str, str]:
+    """Find the nearest antora.yml and return its asciidoc attributes."""
+    current = file_path.parent
+    while True:
+        antora_path = current / "antora.yml"
+        if antora_path in _antora_cache:
+            return _antora_cache[antora_path]
+        if antora_path.is_file() and not antora_path.is_symlink():
+            try:
+                raw = yaml.safe_load(antora_path.read_text())
+                attrs = (raw or {}).get("asciidoc", {}).get("attributes", {})
+                filtered = {k: v for k, v in attrs.items() if isinstance(v, str) and v}
+            except Exception:
+                logger.warning("[extract] Failed to parse %s", antora_path)
+                filtered = {}
+            _antora_cache[antora_path] = filtered
+            return filtered
+        if current == clone_dir or current == current.parent:
+            _antora_cache[clone_dir / "antora.yml"] = {}
+            return {}
+        current = current.parent
+
+
+def _resolve_antora_attributes(content: str, attributes: dict[str, str]) -> str:
+    """Replace {key} attribute references in AsciiDoc content."""
+    for key, value in attributes.items():
+        content = content.replace(f"{{{key}}}", value)
+    return content
+
+
+def _convert_adoc_to_md(file_path: Path, clone_dir: Path | None = None) -> Path:
     """Convert an AsciiDoc file to Markdown, writing a .adoc.md file alongside it.
 
     Uses .adoc.md instead of .md to avoid overwriting a real .md file if the
@@ -337,6 +375,10 @@ def _convert_adoc_to_md(file_path: Path) -> Path:
     if not content.strip():
         md_path.write_text("")
         return md_path
+    if clone_dir is not None:
+        attributes = _load_antora_attributes(file_path, clone_dir)
+        if attributes:
+            content = _resolve_antora_attributes(content, attributes)
     description = _extract_adoc_description(content)
     md_text = pydowndoc.convert_string(content)
     if description:
