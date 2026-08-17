@@ -86,6 +86,11 @@ class KodConfig(BaseModel):
         ge=0,
         description="Character overlap between consecutive chunks",
     )
+    min_chunk_size: int = Field(
+        default=50,
+        ge=0,
+        description="Minimum characters for a chunk to be kept; shorter chunks are dropped",
+    )
     embedding_model: str = Field(
         default="BAAI/bge-small-en-v1.5",
         description="FastEmbed model name for generating embeddings",
@@ -95,6 +100,9 @@ class KodConfig(BaseModel):
     def _check_chunk_overlap(self):
         if self.chunk_overlap >= self.chunk_size:
             msg = "chunk_overlap must be less than chunk_size"
+            raise ValueError(msg)
+        if self.min_chunk_size > self.chunk_size:
+            msg = "min_chunk_size must not exceed chunk_size"
             raise ValueError(msg)
         return self
 
