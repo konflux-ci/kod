@@ -27,7 +27,7 @@ def test_version(runner):
 
 @pytest.mark.parametrize(
     "cmd",
-    ["extract", "transform", "embed", "index", "build-image", "serve", "pipeline"],
+    ["extract", "transform", "embed", "index", "build-image", "serve", "pipeline", "benchmark"],
 )
 def test_subcommand_help(runner, cmd):
     result = runner.invoke(cli, [cmd, "--help"])
@@ -177,6 +177,140 @@ def test_get_config_missing_file_raises():
     ctx.obj = {"config_path": "nonexistent.yaml"}
     with pytest.raises(click.BadParameter, match="No such file"):
         _get_config(ctx)
+
+
+@patch("kod.pipeline.benchmark.run_benchmark")
+def test_benchmark_runs(mock_benchmark, runner, sample_config_yaml, tmp_path):
+    queries_file = tmp_path / "queries.yaml"
+    queries_file.write_text("queries:\n  - query: test\n    expected_sources: [docs]\n")
+    mock_benchmark.return_value = []
+    result = runner.invoke(
+        cli,
+        [
+            "--config",
+            sample_config_yaml,
+            "benchmark",
+            "--chunk-sizes",
+            "500,1000",
+            "--queries",
+            str(queries_file),
+            "--top-k",
+            "3,5",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    mock_benchmark.assert_called_once()
+    args = mock_benchmark.call_args
+    assert args[0][1] == [500, 1000]
+    assert args[0][3] == [3, 5]
+
+
+def test_benchmark_invalid_chunk_sizes(runner, sample_config_yaml, tmp_path):
+    queries_file = tmp_path / "queries.yaml"
+    queries_file.write_text("queries:\n  - query: test\n    expected_sources: [docs]\n")
+    result = runner.invoke(
+        cli,
+        [
+            "--config",
+            sample_config_yaml,
+            "benchmark",
+            "--chunk-sizes",
+            "abc,500",
+            "--queries",
+            str(queries_file),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "chunk-sizes" in result.output
+
+
+def test_benchmark_invalid_top_k(runner, sample_config_yaml, tmp_path):
+    queries_file = tmp_path / "queries.yaml"
+    queries_file.write_text("queries:\n  - query: test\n    expected_sources: [docs]\n")
+    result = runner.invoke(
+        cli,
+        [
+            "--config",
+            sample_config_yaml,
+            "benchmark",
+            "--chunk-sizes",
+            "500",
+            "--queries",
+            str(queries_file),
+            "--top-k",
+            "x,y",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "top-k" in result.output
+
+
+def test_benchmark_top_k_zero_rejected(runner, sample_config_yaml, tmp_path):
+    queries_file = tmp_path / "queries.yaml"
+    queries_file.write_text("queries:\n  - query: test\n    expected_sources: [docs]\n")
+    result = runner.invoke(
+        cli,
+        [
+            "--config",
+            sample_config_yaml,
+            "benchmark",
+            "--chunk-sizes",
+            "500",
+            "--queries",
+            str(queries_file),
+            "--top-k",
+            "0",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "top-k" in result.output
+
+
+def test_benchmark_chunk_sizes_zero_rejected(runner, sample_config_yaml, tmp_path):
+    queries_file = tmp_path / "queries.yaml"
+    queries_file.write_text("queries:\n  - query: test\n    expected_sources: [docs]\n")
+    result = runner.invoke(
+        cli,
+        [
+            "--config",
+            sample_config_yaml,
+            "benchmark",
+            "--chunk-sizes",
+            "0,500",
+            "--queries",
+            str(queries_file),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "chunk-sizes" in result.output
+
+
+def test_benchmark_deduplicates_top_k(runner, sample_config_yaml, tmp_path):
+    queries_file = tmp_path / "queries.yaml"
+    queries_file.write_text("queries:\n  - query: test\n    expected_sources: [docs]\n")
+
+    from unittest.mock import patch as mock_patch
+
+    with mock_patch("kod.pipeline.benchmark.run_benchmark") as mock_benchmark:
+        mock_benchmark.return_value = []
+        result = runner.invoke(
+            cli,
+            [
+                "--config",
+                sample_config_yaml,
+                "benchmark",
+                "--chunk-sizes",
+                "500,500,1000",
+                "--queries",
+                str(queries_file),
+                "--top-k",
+                "5,5",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        args = mock_benchmark.call_args[0]
+        assert args[1] == [500, 1000]
+        assert args[3] == [5]
 
 
 def test_invalid_config_shows_clean_error(runner, tmp_path):

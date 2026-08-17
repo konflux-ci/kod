@@ -1,0 +1,83 @@
+# Benchmark queries for evaluating KOD retrieval quality.
+# Each query has a list of expected_sources that should appear in the top results.
+
+queries:
+  - query: "how to troubleshoot a failed build pipeline"
+    expected_sources:
+      - konflux-ci-docs
+
+  - query: "creating an application and component in Konflux"
+    expected_sources:
+      - konflux-ci-docs
+
+  - query: "customizing the build pipeline with custom tasks"
+    expected_sources:
+      - konflux-ci-docs
+
+  - query: "hermetic builds and prefetching dependencies"
+    expected_sources:
+      - konflux-ci-docs
+
+  - query: "creating secrets for container registry authentication"
+    expected_sources:
+      - konflux-ci-docs
+
+  - query: "configuring integration tests for a snapshot"
+    expected_sources:
+      - konflux-ci-docs
+
+  - query: "enterprise contract policy evaluation and compliance"
+    expected_sources:
+      - conforma-policy
+
+  - query: "how to verify artifact provenance attestation"
+    expected_sources:
+      - conforma-user-guide
+
+  - query: "pipelines as code webhook configuration and event matching"
+    expected_sources:
+      - pipelines-as-code
+
+  - query: "retest and ok-to-test commands for pull request pipelines"
+    expected_sources:
+      - pipelines-as-code
+
+  - query: "release plan and release plan admission configuration"
+    expected_sources:
+      - release-service-docs
+
+  - query: "scheduled builds with CronJobs for daily rebuilds"
+    expected_sources:
+      - konflux-ci-docs
+
+  - query: "Mintmaker dependency management and renovate configuration"
+    expected_sources:
+      - konflux-ci-docs
+
+  - query: "component nudges and automatic image update propagation"
+    expected_sources:
+      - konflux-ci-docs
+
+  - query: "override snapshots for integration testing"
+    expected_sources:
+      - konflux-ci-docs
+
+  - query: "release strategies push to registry and advisory"
+    expected_sources:
+      - release-service-docs
+
+  - query: "concurrency limits for parallel pipeline runs"
+    expected_sources:
+      - pipelines-as-code
+
+  - query: "using CEL expressions to filter git events"
+    expected_sources:
+      - pipelines-as-code
+
+  - query: "ec validate image command and policy violations"
+    expected_sources:
+      - conforma-cli
+
+  - query: "SLSA compliance levels and supply chain security requirements"
+    expected_sources:
+      - conforma-user-guide
