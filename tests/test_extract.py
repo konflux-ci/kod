@@ -6,9 +6,12 @@ from io import BytesIO
 from unittest.mock import patch
 from urllib.error import URLError
 
+import pytest
+
 from kod.config import DocumentSource
 from kod.config import KodConfig
 from kod.models import Document
+from kod.pipeline.extract import _antora_cache
 from kod.pipeline.extract import _clone_repo
 from kod.pipeline.extract import _convert_adoc_to_md
 from kod.pipeline.extract import _discover_urls_by_crawling
@@ -23,10 +26,20 @@ from kod.pipeline.extract import _has_text
 from kod.pipeline.extract import _insert_after_first_heading
 from kod.pipeline.extract import _is_git_url
 from kod.pipeline.extract import _is_under_path
+from kod.pipeline.extract import _load_antora_attributes
 from kod.pipeline.extract import _normalize_url
 from kod.pipeline.extract import _partition_file
+from kod.pipeline.extract import _resolve_antora_attributes
 from kod.pipeline.extract import _write_documents
 from kod.pipeline.extract import run_extract
+
+
+@pytest.fixture(autouse=True)
+def _clear_antora_cache():
+    """Reset the module-level antora attribute cache between tests."""
+    _antora_cache.clear()
+    yield
+    _antora_cache.clear()
 
 
 class FakeElement:
@@ -263,7 +276,7 @@ def test_partition_file_adoc(mock_convert, mock_partition, tmp_path):
 
     _partition_file(adoc)
 
-    mock_convert.assert_called_once_with(adoc)
+    mock_convert.assert_called_once_with(adoc, None)
     mock_partition.assert_called_once_with(filename=str(md_path), strategy="fast")
 
 
@@ -279,7 +292,7 @@ def test_partition_file_uppercase_adoc(mock_convert, mock_partition, tmp_path):
 
     _partition_file(adoc)
 
-    mock_convert.assert_called_once_with(adoc)
+    mock_convert.assert_called_once_with(adoc, None)
 
 
 @patch("kod.pipeline.extract.partition")
@@ -291,6 +304,183 @@ def test_partition_file_non_adoc(mock_partition, tmp_path):
     _partition_file(md)
 
     mock_partition.assert_called_once_with(filename=str(md), strategy="fast")
+
+
+# --- _load_antora_attributes ---
+
+
+def test_load_antora_attributes_finds_attributes(tmp_path):
+    antora = tmp_path / "antora.yml"
+    antora.write_text("asciidoc:\n  attributes:\n    ProductName: Konflux\n    context: test\n")
+    doc = tmp_path / "modules" / "ROOT" / "pages"
+    doc.mkdir(parents=True)
+
+    result = _load_antora_attributes(doc / "index.adoc", tmp_path)
+
+    assert result == {"ProductName": "Konflux", "context": "test"}
+
+
+def test_load_antora_attributes_walks_up(tmp_path):
+    antora = tmp_path / "antora.yml"
+    antora.write_text("asciidoc:\n  attributes:\n    ProductName: Konflux\n")
+    deep = tmp_path / "a" / "b" / "c"
+    deep.mkdir(parents=True)
+
+    result = _load_antora_attributes(deep / "file.adoc", tmp_path)
+
+    assert result == {"ProductName": "Konflux"}
+
+
+def test_load_antora_attributes_no_antora_yml(tmp_path):
+    doc = tmp_path / "modules"
+    doc.mkdir()
+
+    result = _load_antora_attributes(doc / "file.adoc", tmp_path)
+
+    assert result == {}
+
+
+def test_load_antora_attributes_filters_empty_values(tmp_path):
+    antora = tmp_path / "antora.yml"
+    antora.write_text(
+        "asciidoc:\n  attributes:\n    ProductName: Konflux\n    Empty: ''\n    Also: \"\"\n"
+    )
+
+    result = _load_antora_attributes(tmp_path / "file.adoc", tmp_path)
+
+    assert result == {"ProductName": "Konflux"}
+
+
+def test_load_antora_attributes_malformed_yaml(tmp_path):
+    antora = tmp_path / "antora.yml"
+    antora.write_text("invalid: yaml: [")
+
+    result = _load_antora_attributes(tmp_path / "file.adoc", tmp_path)
+
+    assert result == {}
+
+
+def test_load_antora_attributes_stops_at_clone_dir(tmp_path):
+    antora = tmp_path / "antora.yml"
+    antora.write_text("asciidoc:\n  attributes:\n    ProductName: Leaked\n")
+    clone_dir = tmp_path / "repo"
+    doc = clone_dir / "modules"
+    doc.mkdir(parents=True)
+
+    result = _load_antora_attributes(doc / "file.adoc", clone_dir)
+
+    assert result == {}
+
+
+def test_load_antora_attributes_filters_non_string_values(tmp_path):
+    antora = tmp_path / "antora.yml"
+    antora.write_text(
+        "asciidoc:\n  attributes:\n"
+        "    ProductName: Konflux\n"
+        "    flag: true\n"
+        "    count: 42\n"
+        "    nothing: null\n"
+    )
+
+    result = _load_antora_attributes(tmp_path / "file.adoc", tmp_path)
+
+    assert result == {"ProductName": "Konflux"}
+
+
+def test_load_antora_attributes_caches_negative(tmp_path):
+    clone_dir = tmp_path / "repo"
+    doc = clone_dir / "a" / "b"
+    doc.mkdir(parents=True)
+
+    _load_antora_attributes(doc / "file.adoc", clone_dir)
+
+    assert (clone_dir / "antora.yml") in _antora_cache
+    assert _antora_cache[clone_dir / "antora.yml"] == {}
+
+
+def test_load_antora_attributes_rejects_symlink(tmp_path):
+    real_antora = tmp_path / "real" / "antora.yml"
+    real_antora.parent.mkdir()
+    real_antora.write_text("asciidoc:\n  attributes:\n    ProductName: Leaked\n")
+    clone_dir = tmp_path / "repo"
+    doc = clone_dir / "modules"
+    doc.mkdir(parents=True)
+    (clone_dir / "antora.yml").symlink_to(real_antora)
+
+    result = _load_antora_attributes(doc / "file.adoc", clone_dir)
+
+    assert result == {}
+
+
+def test_load_antora_attributes_caches(tmp_path):
+    antora = tmp_path / "antora.yml"
+    antora.write_text("asciidoc:\n  attributes:\n    Name: Test\n")
+
+    _load_antora_attributes(tmp_path / "a.adoc", tmp_path)
+    _load_antora_attributes(tmp_path / "b.adoc", tmp_path)
+
+    assert antora in _antora_cache
+
+
+# --- _resolve_antora_attributes ---
+
+
+def test_resolve_antora_attributes_replaces():
+    content = "= Why {ProductName}?\n\n{ProductName} is great."
+    result = _resolve_antora_attributes(content, {"ProductName": "Konflux"})
+
+    assert result == "= Why Konflux?\n\nKonflux is great."
+
+
+def test_resolve_antora_attributes_empty_dict():
+    content = "= Why {ProductName}?"
+    result = _resolve_antora_attributes(content, {})
+
+    assert result == content
+
+
+def test_resolve_antora_attributes_multiple():
+    content = "{productName} {serviceName}"
+    result = _resolve_antora_attributes(
+        content, {"productName": "Konflux", "serviceName": "Release Service"}
+    )
+
+    assert result == "Konflux Release Service"
+
+
+# --- _convert_adoc_to_md with antora attributes ---
+
+
+@patch("kod.pipeline.extract.pydowndoc.convert_string", return_value="# Why Konflux?\n\nBody")
+def test_convert_adoc_to_md_resolves_attributes(mock_convert, tmp_path):
+    antora = tmp_path / "antora.yml"
+    antora.write_text("asciidoc:\n  attributes:\n    ProductName: Konflux\n")
+    adoc = tmp_path / "doc.adoc"
+    adoc.write_text("= Why {ProductName}?\n\nBody")
+
+    _convert_adoc_to_md(adoc, clone_dir=tmp_path)
+
+    mock_convert.assert_called_once_with("= Why Konflux?\n\nBody")
+
+
+@patch("kod.pipeline.extract.pydowndoc.convert_string", return_value="# Title\n\nBody")
+def test_convert_adoc_to_md_no_antora_yml_skips_resolution(mock_convert, tmp_path):
+    adoc = tmp_path / "doc.adoc"
+    adoc.write_text("= {ProductName}\n\nBody")
+
+    _convert_adoc_to_md(adoc, clone_dir=tmp_path)
+
+    mock_convert.assert_called_once_with("= {ProductName}\n\nBody")
+
+
+@patch("kod.pipeline.extract.pydowndoc.convert_string", return_value="# Title\n\nBody")
+def test_convert_adoc_to_md_no_clone_dir_skips_attributes(mock_convert, tmp_path):
+    adoc = tmp_path / "doc.adoc"
+    adoc.write_text("= {ProductName}\n\nBody")
+
+    _convert_adoc_to_md(adoc)
+
+    mock_convert.assert_called_once_with("= {ProductName}\n\nBody")
 
 
 # --- _write_documents ---
@@ -482,6 +672,8 @@ def test_discover_sitemap_success(mock_urlopen):
         "https://test.example.com/docs",
         "https://test.example.com/about",
     ]
+    req = mock_urlopen.call_args[0][0]
+    assert req.get_header("User-agent") == "KOD/1.0"
 
 
 @patch("kod.pipeline.extract.urlopen")
@@ -557,7 +749,8 @@ def test_discover_sitemap_respects_max_pages(mock_urlopen):
 def _mock_urlopen_pages(pages):
     """Return a side_effect for urlopen that serves pages by URL."""
 
-    def side_effect(url, timeout=None):
+    def side_effect(req_or_url, timeout=None):
+        url = req_or_url.full_url if hasattr(req_or_url, "full_url") else req_or_url
         if url in pages:
             resp = BytesIO(pages[url].encode())
             resp.close = lambda: None
@@ -579,6 +772,8 @@ def test_discover_crawl_basic(mock_urlopen):
     assert "https://test.example.com/" in urls
     assert "https://test.example.com/about" in urls
     assert len(result) == 2
+    req = mock_urlopen.call_args_list[0][0][0]
+    assert req.get_header("User-agent") == "KOD/1.0"
 
 
 @patch("kod.pipeline.extract.urlopen")
