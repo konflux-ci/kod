@@ -1,0 +1,54 @@
+# KOD production configuration
+# Sources covering the Konflux ecosystem documentation.
+
+chunk_size: 2500
+chunk_overlap: 200
+min_chunk_size: 100
+embedding_model: BAAI/bge-small-en-v1.5
+
+sources:
+  - name: konflux-ci-docs
+    url: https://github.com/konflux-ci/docs.git
+    include_paths:
+      - modules
+    metadata:
+      product: Konflux
+
+  - name: release-service-docs
+    url: https://github.com/konflux-ci/release-service-docs.git
+    include_paths:
+      - docs/modules
+    metadata:
+      product: Konflux
+      topic: releasing
+
+  - name: pipelines-as-code
+    url: https://github.com/tektoncd/pipelines-as-code.git
+    include_paths:
+      - docs/content/docs
+    metadata:
+      product: Pipelines as Code
+
+  - name: conforma-user-guide
+    url: https://github.com/conforma/user-guide.git
+    include_paths:
+      - modules
+    metadata:
+      product: Conforma
+      topic: user guide
+
+  - name: conforma-cli
+    url: https://github.com/conforma/cli.git
+    include_paths:
+      - docs/modules
+    metadata:
+      product: Conforma
+      topic: cli
+
+  - name: conforma-policy
+    url: https://github.com/conforma/policy.git
+    include_paths:
+      - antora/docs/modules
+    metadata:
+      product: Conforma
+      topic: policy
