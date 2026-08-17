@@ -34,7 +34,11 @@ def run_transform(config: KodConfig) -> None:
             documents = _read_documents(input_path)
             chunks = []
             for doc in documents:
-                chunks.extend(_chunk_document(doc, config.chunk_size, config.chunk_overlap))
+                chunks.extend(
+                    _chunk_document(
+                        doc, config.chunk_size, config.chunk_overlap, config.min_chunk_size
+                    )
+                )
             output_path = chunked_dir / f"{source.name}.jsonl"
             write_chunks(chunks, output_path)
             logger.info(
@@ -65,7 +69,9 @@ def _read_documents(path: Path) -> list[Document]:
     return documents
 
 
-def _chunk_document(doc: Document, chunk_size: int, chunk_overlap: int) -> list[DocumentChunk]:
+def _chunk_document(
+    doc: Document, chunk_size: int, chunk_overlap: int, min_chunk_size: int = 0
+) -> list[DocumentChunk]:
     """Split a document into chunks using Unstructured's title-based chunking."""
     elements = elements_from_dicts(doc.elements)
     if not elements:
@@ -88,15 +94,22 @@ def _chunk_document(doc: Document, chunk_size: int, chunk_overlap: int) -> list[
     # start with a heading.
     current_section = None
     result = []
-    for i, chunk in enumerate(chunks):
+    for chunk in chunks:
         title = _get_section_title(chunk)
         if title:
             current_section = title
+        if len(chunk.text) < min_chunk_size:
+            logger.debug(
+                "[transform] Dropping short chunk (%d chars) from %s",
+                len(chunk.text),
+                document_id,
+            )
+            continue
         result.append(
             DocumentChunk(
                 document_id=document_id,
                 content=chunk.text,
-                chunk_index=i,
+                chunk_index=len(result),
                 source_name=doc.source_name,
                 source_url=doc.source_url,
                 file_path=doc.file_path,

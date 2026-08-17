@@ -238,6 +238,47 @@ def test_chunk_overlap_exceeds_chunk_size_rejected():
         )
 
 
+def test_min_chunk_size_default():
+    config = KodConfig(sources=[DocumentSource(name="test", url="https://example.com")])
+    assert config.min_chunk_size == 50
+
+
+def test_min_chunk_size_negative_rejected():
+    with pytest.raises(ValidationError, match="min_chunk_size"):
+        KodConfig(
+            sources=[DocumentSource(name="test", url="https://example.com")],
+            min_chunk_size=-1,
+        )
+
+
+def test_min_chunk_size_zero_allowed():
+    config = KodConfig(
+        sources=[DocumentSource(name="test", url="https://example.com")],
+        min_chunk_size=0,
+    )
+    assert config.min_chunk_size == 0
+
+
+def test_min_chunk_size_exceeds_chunk_size_rejected():
+    with pytest.raises(ValidationError, match="min_chunk_size"):
+        KodConfig(
+            sources=[DocumentSource(name="test", url="https://example.com")],
+            chunk_size=80,
+            chunk_overlap=0,
+            min_chunk_size=100,
+        )
+
+
+def test_min_chunk_size_equals_chunk_size_allowed():
+    config = KodConfig(
+        sources=[DocumentSource(name="test", url="https://example.com")],
+        chunk_size=100,
+        min_chunk_size=100,
+        chunk_overlap=0,
+    )
+    assert config.min_chunk_size == 100
+
+
 def test_embedding_model_default():
     config = KodConfig(sources=[DocumentSource(name="test", url="https://example.com")])
     assert config.embedding_model == "BAAI/bge-small-en-v1.5"

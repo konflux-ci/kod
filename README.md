@@ -100,6 +100,7 @@ Each source has:
 Global pipeline settings:
 - **chunk_size** - maximum characters per chunk (default: 1000)
 - **chunk_overlap** - character overlap between consecutive chunks (default: 200)
+- **min_chunk_size** - minimum characters for a chunk to be kept; shorter chunks are dropped (default: 50)
 - **embedding_model** - FastEmbed model name (default: BAAI/bge-small-en-v1.5)
 
 ## Development

@@ -35,7 +35,7 @@ def _make_elements(*parts):
 
 def _make_document(**overrides):
     defaults = {
-        "elements": _make_elements("Hello world."),
+        "elements": _make_elements("Hello world, this is a test document with enough content."),
         "source_name": "test-source",
         "source_url": "https://example.com",
         "file_path": "doc.md",
@@ -283,13 +283,82 @@ def test_chunk_document_section_title_propagation():
 # --- run_transform ---
 
 
+def test_chunk_document_filters_short_chunks():
+    doc = _make_document(
+        elements=_make_elements(
+            ("Title", "Short"),
+            "tiny",
+            ("Title", "Long Section"),
+            "This is a longer paragraph with enough content to pass the minimum threshold.",
+        ),
+    )
+
+    chunks_all = _chunk_document(doc, chunk_size=1000, chunk_overlap=0, min_chunk_size=0)
+    chunks_filtered = _chunk_document(doc, chunk_size=1000, chunk_overlap=0, min_chunk_size=50)
+
+    assert len(chunks_all) > len(chunks_filtered)
+    assert len(chunks_filtered) >= 1
+    assert all(len(c.content) >= 50 for c in chunks_filtered)
+
+
+def test_chunk_document_min_chunk_size_zero_keeps_all():
+    doc = _make_document(
+        elements=_make_elements(
+            ("Title", "Short"),
+            "tiny",
+            ("Title", "Long Section"),
+            "This is a longer paragraph with enough content to pass the minimum threshold.",
+        ),
+    )
+
+    chunks_all = _chunk_document(doc, chunk_size=1000, chunk_overlap=0, min_chunk_size=0)
+    chunks_filtered = _chunk_document(doc, chunk_size=1000, chunk_overlap=0, min_chunk_size=50)
+
+    assert len(chunks_all) > len(chunks_filtered)
+    assert any(len(c.content) < 50 for c in chunks_all)
+
+
+def test_chunk_document_filters_sequential_chunk_index():
+    long_text = "This is a paragraph with enough content to exceed the minimum. " * 5
+    doc = _make_document(
+        elements=_make_elements(
+            ("Title", "Section A"),
+            long_text,
+            ("Title", "Short"),
+            ("Title", "Section B"),
+            long_text,
+        ),
+    )
+
+    chunks = _chunk_document(doc, chunk_size=1000, chunk_overlap=0, min_chunk_size=50)
+
+    assert len(chunks) >= 2
+    indices = [c.chunk_index for c in chunks]
+    assert indices == list(range(len(chunks)))
+
+
+def test_chunk_document_filters_preserves_section_title():
+    doc = _make_document(
+        elements=_make_elements(
+            ("Title", "Short"),
+            ("Title", "Real Section"),
+            "This is a longer paragraph with enough content to pass the minimum threshold.",
+        ),
+    )
+
+    chunks = _chunk_document(doc, chunk_size=1000, chunk_overlap=0, min_chunk_size=50)
+
+    assert len(chunks) == 1
+    assert chunks[0].section_title == "Real Section"
+
+
 def test_run_transform(tmp_path):
     extracted = tmp_path / "extracted"
     extracted.mkdir()
     doc = _make_document(
         elements=_make_elements(
             ("Title", "Getting Started"),
-            "Introduction to the system.",
+            "Introduction to the system. This covers the basics of getting started.",
         ),
     )
     _write_jsonl(extracted / "test-source.jsonl", [doc])
@@ -385,6 +454,42 @@ def test_run_transform_custom_chunk_size(tmp_path):
     output = tmp_path / "chunked" / "test-source.jsonl"
     lines = output.read_text().strip().split("\n")
     assert len(lines) > 1
+
+
+def test_run_transform_filters_short_chunks(tmp_path):
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    doc = _make_document(
+        elements=_make_elements(
+            ("Title", "Short"),
+            "tiny",
+            ("Title", "Long Section"),
+            "This is a longer paragraph with enough content to pass the threshold.",
+        ),
+    )
+    _write_jsonl(extracted / "test-source.jsonl", [doc])
+
+    config_no_filter = KodConfig(
+        sources=[DocumentSource(name="test-source", url="https://example.com")],
+        data_dir=tmp_path,
+        min_chunk_size=0,
+    )
+    run_transform(config_no_filter)
+    output = tmp_path / "chunked" / "test-source.jsonl"
+    all_count = len(output.read_text().strip().split("\n"))
+
+    config_filter = KodConfig(
+        sources=[DocumentSource(name="test-source", url="https://example.com")],
+        data_dir=tmp_path,
+        min_chunk_size=50,
+    )
+    run_transform(config_filter)
+    lines = output.read_text().strip().split("\n")
+
+    assert len(lines) < all_count
+    for line in lines:
+        chunk = json.loads(line)
+        assert len(chunk["content"]) >= 50
 
 
 def test_run_transform_empty_document(tmp_path):
