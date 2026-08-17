@@ -178,6 +178,46 @@ def serve(data_dir: str, model: str, rrf_k: int, max_queries: int, max_top_k: in
 
 
 @cli.command()
+@click.option(
+    "--chunk-sizes",
+    required=True,
+    help="Comma-separated chunk sizes to evaluate (e.g., 500,1000,1500,2000).",
+)
+@click.option(
+    "--queries",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to YAML file with benchmark queries.",
+)
+@click.option(
+    "--top-k",
+    default="5,10",
+    show_default=True,
+    help="Comma-separated top_k values for recall evaluation.",
+)
+@click.pass_context
+def benchmark(ctx: click.Context, chunk_sizes: str, queries: str, top_k: str) -> None:
+    """Evaluate retrieval quality across different chunk sizes."""
+    from pathlib import Path
+
+    from kod.pipeline.benchmark import run_benchmark
+
+    try:
+        sizes = sorted({int(s.strip()) for s in chunk_sizes.split(",")})
+    except ValueError as e:
+        raise click.BadParameter(str(e), param_hint="'--chunk-sizes'") from e
+    if any(s < 1 for s in sizes):
+        raise click.BadParameter("all chunk sizes must be >= 1", param_hint="'--chunk-sizes'")
+    try:
+        k_values = sorted({int(k.strip()) for k in top_k.split(",")})
+    except ValueError as e:
+        raise click.BadParameter(str(e), param_hint="'--top-k'") from e
+    if any(k < 1 for k in k_values):
+        raise click.BadParameter("all top_k values must be >= 1", param_hint="'--top-k'")
+    run_benchmark(_get_config(ctx), sizes, Path(queries), k_values)
+
+
+@cli.command()
 @click.pass_context
 def pipeline(ctx: click.Context) -> None:
     """Run the full ETL pipeline: extract -> transform -> embed -> index."""

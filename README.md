@@ -83,6 +83,7 @@ Commands:
   build-image  Build the container image with the pre-built index
   serve        Start the MCP server
   pipeline     Run the full ETL pipeline (extract -> transform -> embed -> index)
+  benchmark    Evaluate retrieval quality across different chunk sizes
 ```
 
 ## Configuration
@@ -103,6 +104,21 @@ Global pipeline settings:
 - **chunk_overlap** - character overlap between consecutive chunks (default: 200)
 - **min_chunk_size** - minimum characters for a chunk to be kept; shorter chunks are dropped (default: 50)
 - **embedding_model** - FastEmbed model name (default: BAAI/bge-small-en-v1.5)
+
+## Benchmark
+
+Evaluate retrieval quality across different chunk sizes using a set of
+benchmark queries. Requires extracted data (`kod extract` must run first):
+
+```
+uv run kod -c config.production.yaml benchmark \
+  --chunk-sizes 500,1000,1500,2000,2500 \
+  --queries benchmark_queries.yaml \
+  --top-k 3,5,10
+```
+
+The benchmark runs the transform, embed, and index steps for each chunk size,
+then measures recall against the expected sources in the queries file.
 
 ## Development
 
