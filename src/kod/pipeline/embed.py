@@ -1,6 +1,7 @@
 """Embed step - generate vector embeddings for document chunks."""
 
 import logging
+import os
 
 import numpy as np
 
@@ -55,13 +56,29 @@ def run_embed(config: KodConfig) -> None:
 
 
 def _get_embedding_model(model_name: str) -> TextEmbedding:
-    """Instantiate a FastEmbed text embedding model."""
+    """Instantiate a FastEmbed text embedding model.
+
+    When ``KOD_EMBED_THREADS`` is set, cap the ONNX Runtime intra-op thread
+    pool. ONNX Runtime otherwise sizes it to the host's physical core count
+    (ignoring cgroup CPU limits), and each thread's arena can balloon memory
+    into an OOM on many-core build nodes.
+    """
+    threads = os.environ.get("KOD_EMBED_THREADS")
+    if threads:
+        return TextEmbedding(model_name=model_name, threads=int(threads))
     return TextEmbedding(model_name=model_name)
 
 
 def _embed_chunks(chunks, model) -> np.ndarray:
     """Generate embeddings for a list of chunks using passage_embed."""
     texts = [chunk.content for chunk in chunks]
+    kwargs = {}
+    # FastEmbed's default batch_size (256) drives O(seq^2) attention memory
+    # (batch x heads x seq x seq) into an OOM under tight memory limits; allow
+    # capping it. Unset -> FastEmbed default, so local behavior is unchanged.
+    batch_size = os.environ.get("KOD_EMBED_BATCH_SIZE")
+    if batch_size:
+        kwargs["batch_size"] = int(batch_size)
     # passage_embed() adds the passage prefix for asymmetric retrieval models
-    embeddings = list(model.passage_embed(texts))
+    embeddings = list(model.passage_embed(texts, **kwargs))
     return np.array(embeddings, dtype=np.float32)
