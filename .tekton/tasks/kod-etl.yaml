@@ -1,0 +1,105 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: kod-etl
+  # Runs the KOD ETL (extract -> transform -> embed -> index) inside the build
+  # pipeline so every (daily) Konflux build refreshes the documentation index.
+  #
+  # The index (data/index/) is gitignored and NOT part of the git checkout, so
+  # the stock Containerfile (`COPY data/index/`) has nothing to copy on a clean
+  # build. This task generates it in-place on the shared build workspace, in the
+  # same directory buildah uses as its build context, so the COPY succeeds.
+  # Keeping the ETL here (rather than in the Containerfile) means local
+  # `podman build` still works exactly as documented in the KOD README.
+spec:
+  description: >-
+    Generate the FAISS documentation index by running `kod pipeline` in the
+    cloned source on the shared build workspace, so buildah's `COPY data/index/`
+    picks up a freshly-built index.
+  params:
+    - name: config
+      description: Path (relative to the source root) to the KOD config file.
+      type: string
+      default: config.production.yaml
+    - name: subdirectory
+      description: >-
+        Checkout location inside the source workspace. Matches the git-clone
+        task's `subdirectory` default so this task's working dir equals buildah's
+        build context ($(workspaces.source.path)/source).
+      type: string
+      default: source
+  workspaces:
+    - name: source
+      description: The shared build workspace holding the cloned source.
+  volumes:
+    # Keep the (large) uv venv, uv cache, and FastEmbed model off the small
+    # build-workspace PVC — only data/ needs to persist there for buildah.
+    - name: workdir
+      emptyDir: {}
+    # OpenShift-injected cluster CA bundle. FastEmbed downloads the embedding
+    # model from huggingface.co, whose chain does not verify under Python's
+    # bundled certifi in this build network; the cluster bundle does.
+    - name: trusted-ca
+      configMap:
+        name: trusted-ca
+        items:
+          - key: ca-bundle.crt
+            path: ca-bundle.crt
+  steps:
+    # Needs network (clones the doc repos + fetches wheels) and is CPU-bound on
+    # embedding — request generous CPU (see CWFHEALTH-5077). ubi9/python ships
+    # git, which `kod extract` shells out to.
+    - name: run-etl
+      image: registry.access.redhat.com/ubi9/python-312:latest
+      workingDir: $(workspaces.source.path)/$(params.subdirectory)
+      volumeMounts:
+        - name: workdir
+          mountPath: /var/workdir
+        - name: trusted-ca
+          mountPath: /mnt/trusted-ca
+          readOnly: true
+      env:
+        - name: UV_PROJECT_ENVIRONMENT
+          value: /var/workdir/venv
+        - name: UV_CACHE_DIR
+          value: /var/workdir/uv-cache
+        - name: FASTEMBED_CACHE_PATH
+          value: /var/workdir/fastembed-cache
+        # Bound ONNX Runtime's intra-op thread pool (it otherwise sizes to the
+        # node's physical cores, ignoring the cgroup limit, and OOMs). Match the
+        # CPU request. OMP is set defensively for numpy/BLAS.
+        - name: KOD_EMBED_THREADS
+          value: "4"
+        - name: OMP_NUM_THREADS
+          value: "4"
+        # Cap embedding batch size — the O(seq^2) attention memory at the default
+        # (256) OOMs even at 8Gi. 32 keeps peak well under the limit.
+        - name: KOD_EMBED_BATCH_SIZE
+          value: "32"
+        # git/requests/OpenSSL-based clients honor these directly.
+        - name: SSL_CERT_FILE
+          value: /mnt/trusted-ca/ca-bundle.crt
+        - name: REQUESTS_CA_BUNDLE
+          value: /mnt/trusted-ca/ca-bundle.crt
+      computeResources:
+        requests:
+          cpu: "4"
+          memory: 4Gi
+        limits:
+          cpu: "8"
+          memory: 8Gi
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        pip install --no-cache-dir uv
+        uv sync --locked --no-dev
+        # huggingface_hub uses httpx, which trusts certifi's bundle (not
+        # SSL_CERT_FILE). Append the cluster CA so the model download verifies.
+        certifi_pem="$(uv run python -c 'import certifi; print(certifi.where())')"
+        cat /mnt/trusted-ca/ca-bundle.crt >> "$certifi_pem"
+        uv run kod -c "$(params.config)" pipeline
+        # Sanity check: buildah's `COPY data/index/` needs these to exist.
+        test -f data/index/index.faiss
+        test -f data/index/metadata.jsonl
+        echo "ETL complete:"
+        ls -lh data/index/
