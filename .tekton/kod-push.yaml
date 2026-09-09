@@ -7,6 +7,7 @@ metadata:
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
+    pipelinesascode.tekton.dev/task: '[.tekton/tasks/kod-etl.yaml, .tekton/tasks/kod-smoke-test.yaml]'
     pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
       == "main"
   labels:
@@ -27,6 +28,9 @@ spec:
     value: Containerfile
   - name: path-context
     value: .
+  timeouts:
+    # ETL embedding is CPU-heavy (see CWFHEALTH-5077); default 1h is too tight.
+    pipeline: 2h0m0s
   pipelineSpec:
     description: |
       This pipeline is ideal for building container images from a Containerfile while reducing network traffic.
@@ -197,6 +201,17 @@ spec:
         workspace: git-auth
       - name: netrc
         workspace: netrc
+    - name: kod-etl
+      params:
+      - name: config
+        value: config.production.yaml
+      runAfter:
+      - prefetch-dependencies
+      taskRef:
+        name: kod-etl
+      workspaces:
+      - name: source
+        workspace: workspace
     - name: build-container
       params:
       - name: IMAGE
@@ -235,7 +250,7 @@ spec:
       - name: OMIT_HISTORY
         value: $(params.omit-history)
       runAfter:
-      - prefetch-dependencies
+      - kod-etl
       taskRef:
         params:
         - name: name
@@ -270,6 +285,19 @@ spec:
         - name: kind
           value: task
         resolver: bundles
+    - name: smoke-test
+      params:
+      - name: IMAGE
+        value: $(tasks.build-image-index.results.IMAGE_URL)@$(tasks.build-image-index.results.IMAGE_DIGEST)
+      runAfter:
+      - build-image-index
+      taskRef:
+        name: kod-smoke-test
+      when:
+      - input: $(params.skip-checks)
+        operator: in
+        values:
+        - "false"
     - name: build-source-image
       params:
       - name: BINARY_IMAGE
@@ -542,7 +570,7 @@ spec:
         - ReadWriteOnce
         resources:
           requests:
-            storage: 1Gi
+            storage: 5Gi
       status: {}
   - name: git-auth
     secret:

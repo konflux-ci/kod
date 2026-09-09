@@ -1,0 +1,55 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: kod-smoke-test
+  # Verifies the freshly built KOD image actually starts and serves MCP.
+  # There is no HTTP health endpoint, so we start `kod serve` and connect with a
+  # FastMCP client (already present in the image venv) to list the tools.
+spec:
+  description: >-
+    Start the built KOD image and assert the MCP server exposes the expected
+    tools (search_knowledge, get_document).
+  params:
+    - name: IMAGE
+      description: Fully qualified built image reference (url@sha256:digest).
+      type: string
+  steps:
+    - name: mcp-smoke
+      image: $(params.IMAGE)
+      # Override the image ENTRYPOINT (`kod serve`) with our test driver.
+      command:
+        - /usr/bin/env
+        - bash
+      args:
+        - -c
+        - |
+          set -euo pipefail
+          # Start the server in the background (index is baked into the image).
+          kod serve &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+
+          python - <<'PY'
+          import asyncio
+          from fastmcp import Client
+
+          EXPECTED = {"search_knowledge", "get_document"}
+
+          async def main():
+              last_err = None
+              for attempt in range(30):
+                  try:
+                      async with Client("http://127.0.0.1:8000/mcp") as client:
+                          tools = {t.name for t in await client.list_tools()}
+                          missing = EXPECTED - tools
+                          if missing:
+                              raise AssertionError(f"missing MCP tools: {missing}; got {tools}")
+                          print(f"smoke OK - tools: {sorted(tools)}")
+                          return
+                  except Exception as e:  # noqa: BLE001 - retry until server is up
+                      last_err = e
+                      await asyncio.sleep(2)
+              raise SystemExit(f"MCP server did not become ready: {last_err}")
+
+          asyncio.run(main())
+          PY
