@@ -1,0 +1,38 @@
+# KOD Konflux onboarding CRs. Applying the Component with the `configure-pac`
+# request makes Konflux open a PR on the KOD repo adding the .tekton/
+# PipelineRuns.
+#
+# Replace <TENANT_NS> with your Konflux tenant namespace, then:
+#   oc apply -f konflux/application-and-component.yaml
+---
+apiVersion: appstudio.redhat.com/v1alpha1
+kind: Application
+metadata:
+  name: kod
+  namespace: <TENANT_NS>
+spec:
+  displayName: KOD (Konflux Offline Documentation)
+---
+apiVersion: appstudio.redhat.com/v1alpha1
+kind: Component
+metadata:
+  name: kod
+  namespace: <TENANT_NS>
+  annotations:
+    # One-time: makes Konflux open the .tekton/ PaC PR. After the PR merges,
+    # this annotation is effectively spent (leave it or drop it).
+    build.appstudio.openshift.io/request: configure-pac
+    # image-controller auto-creates the public quay repo and push secret for
+    # this component (e.g. quay.io/redhat-user-workloads*/<TENANT_NS>/kod).
+    image.redhat.com/generate: '{"visibility":"public"}'
+    # Baseline generated pipeline; we customize it in-repo afterward.
+    build.appstudio.openshift.io/pipeline: '{"name":"docker-build","bundle":"latest"}'
+spec:
+  application: kod
+  componentName: kod
+  source:
+    git:
+      url: https://github.com/konflux-ci/kod
+      revision: main
+      dockerfileUrl: Containerfile
+      context: ./

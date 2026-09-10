@@ -1,0 +1,73 @@
+# Daily rebuild for KOD — nudges the Konflux Component once a day so the image
+# is rebuilt with fresh documentation (the kod-etl task re-runs the ETL each build).
+#
+# Replace <TENANT_NS> with your Konflux tenant namespace, then:
+#   oc apply -f konflux/daily-rebuild.yaml
+#
+# Manual test:
+#   oc create job --from=cronjob/kod-daily-rebuild kod-rebuild-test -n <TENANT_NS>
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kod-daily-rebuild
+  namespace: <TENANT_NS>
+---
+# Many Konflux tenants do not permit creating custom Roles (RBAC is managed via
+# curated ClusterRoles). Bind the rebuild SA to the maintainer ClusterRole,
+# which grants `patch` on components — the action the CronJob performs. Adjust
+# the roleRef name if your instance uses a different ClusterRole.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kod-daily-rebuild
+  namespace: <TENANT_NS>
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: konflux-maintainer-user-actions
+subjects:
+  - kind: ServiceAccount
+    name: kod-daily-rebuild
+    namespace: <TENANT_NS>
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kod-daily-rebuild
+  namespace: <TENANT_NS>
+spec:
+  # 04:30 UTC — avoid the midnight thundering herd.
+  schedule: "30 4 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      # Cap the Job's runtime so a hung API call can't stay Active forever and
+      # (with concurrencyPolicy: Forbid) block every later scheduled rebuild.
+      activeDeadlineSeconds: 300
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: kod-daily-rebuild
+          containers:
+            - name: trigger-rebuild
+              # Pinned to an immutable digest so a moved `v1` tag can't run
+              # unreviewed code under this SA's permissions. Update deliberately.
+              image: quay.io/konflux-ci/task-runner:v1@sha256:b9ef0479b57a494368a12a02886c650314c9ac7391c6228f21065865aab71c9e
+              command: [/bin/bash, -c]
+              # No -n: in-cluster oc targets the pod's own namespace.
+              # --request-timeout bounds a hung apiserver call.
+              args:
+                - >-
+                  oc annotate component/kod
+                  build.appstudio.openshift.io/request=trigger-pac-build
+                  --overwrite --request-timeout=60s
+              securityContext:
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]
