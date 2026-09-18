@@ -37,7 +37,7 @@ def _write_chunks(path, chunks):
 def _mock_model(dim=384):
     model = MagicMock()
 
-    def fake_passage_embed(texts):
+    def fake_passage_embed(texts, **kwargs):
         for _ in texts:
             yield np.random.default_rng(42).random(dim, dtype=np.float32)
 
@@ -53,6 +53,15 @@ def test_get_embedding_model(mock_cls):
     _get_embedding_model("BAAI/bge-small-en-v1.5")
 
     mock_cls.assert_called_once_with(model_name="BAAI/bge-small-en-v1.5")
+
+
+@patch("kod.pipeline.embed.TextEmbedding")
+def test_get_embedding_model_caps_threads(mock_cls, monkeypatch):
+    monkeypatch.setenv("KOD_EMBED_THREADS", "4")
+
+    _get_embedding_model("BAAI/bge-small-en-v1.5")
+
+    mock_cls.assert_called_once_with(model_name="BAAI/bge-small-en-v1.5", threads=4)
 
 
 # --- _embed_chunks ---
@@ -76,6 +85,17 @@ def test_embed_chunks_single():
     result = _embed_chunks(chunks, model)
 
     assert result.shape == (1, 384)
+
+
+def test_embed_chunks_caps_batch_size(monkeypatch):
+    monkeypatch.setenv("KOD_EMBED_BATCH_SIZE", "32")
+    model = _mock_model(dim=384)
+    chunks = [_make_chunk(content="First"), _make_chunk(content="Second")]
+
+    result = _embed_chunks(chunks, model)
+
+    assert result.shape == (2, 384)
+    model.passage_embed.assert_called_once_with(["First", "Second"], batch_size=32)
 
 
 # --- run_embed ---
