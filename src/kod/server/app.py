@@ -1,5 +1,6 @@
 """Application context and resource loading for the KOD MCP server."""
 
+import json
 import logging
 
 from dataclasses import dataclass
@@ -26,10 +27,29 @@ class AppContext:
     model: TextEmbedding
 
 
+def _read_indexed_model(path: Path) -> str | None:
+    """Return the embedding model name recorded at index time, if available.
+
+    The metadata file is best-effort provenance, so an unreadable, malformed,
+    or unexpected payload is logged and ignored rather than aborting startup.
+    """
+    try:
+        meta = json.loads(path.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        logger.warning("Ignoring unreadable or malformed index metadata at %s", path)
+        return None
+    if not isinstance(meta, dict):
+        logger.warning("Ignoring malformed index metadata at %s", path)
+        return None
+    model = meta.get("embedding_model")
+    return model if isinstance(model, str) else None
+
+
 def load_app_context(data_dir: Path, embedding_model: str) -> AppContext:
     """Load FAISS index, metadata, and embedding model."""
     index_path = data_dir / "index" / "index.faiss"
     metadata_path = data_dir / "index" / "metadata.jsonl"
+    index_meta_path = data_dir / "index" / "index_meta.json"
 
     logger.info("Loading FAISS index from %s", index_path)
     index = faiss.read_index(str(index_path), faiss.IO_FLAG_MMAP)
@@ -39,6 +59,30 @@ def load_app_context(data_dir: Path, embedding_model: str) -> AppContext:
 
     if len(metadata) != index.ntotal:
         msg = f"Metadata count ({len(metadata)}) does not match index vector count ({index.ntotal})"
+        raise ValueError(msg)
+
+    if index_meta_path.exists():
+        indexed_model = _read_indexed_model(index_meta_path)
+        # FastEmbed resolves model names case-insensitively, so compare that way.
+        if indexed_model and indexed_model.lower() != embedding_model.lower():
+            logger.warning(
+                "Configured embedding model '%s' differs from the model used at index "
+                "time '%s'; query and document vectors may be incompatible, degrading "
+                "search rankings",
+                embedding_model,
+                indexed_model,
+            )
+
+    # Check dimensions from FastEmbed's registry before loading the model, so a
+    # mismatched-but-valid model fails fast instead of paying a full ONNX load
+    # (which can OOM a memory-capped pod) only to be rejected afterwards.
+    model_dim = TextEmbedding.get_embedding_size(embedding_model)
+    if model_dim != index.d:
+        msg = (
+            f"Embedding model '{embedding_model}' produces {model_dim}-dim "
+            f"vectors but the FAISS index has {index.d} dims; the index must be rebuilt "
+            f"with this model or the server started with the model used to build it"
+        )
         raise ValueError(msg)
 
     logger.info("Loading embedding model: %s", embedding_model)

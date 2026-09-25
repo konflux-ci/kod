@@ -105,6 +105,46 @@ def test_run_index(tmp_path):
     assert len(meta_lines) == 1
 
 
+def test_run_index_writes_index_meta(tmp_path):
+    chunks = [_make_chunk()]
+    embeddings = _make_embeddings(1)
+
+    chunked = tmp_path / "chunked"
+    chunked.mkdir()
+    _write_chunks(chunked / "test-source.jsonl", chunks)
+
+    embedded = tmp_path / "embedded"
+    embedded.mkdir()
+    np.save(embedded / "test-source.npy", embeddings)
+
+    config = KodConfig(
+        sources=[DocumentSource(name="test-source", url="https://example.com")],
+        data_dir=tmp_path,
+        embedding_model="custom/embedding-model",
+    )
+
+    run_index(config)
+
+    index_meta = json.loads((tmp_path / "index" / "index_meta.json").read_text())
+    assert index_meta == {"embedding_model": "custom/embedding-model"}
+
+
+def test_run_index_no_meta_when_nothing_indexed(tmp_path):
+    embedded = tmp_path / "embedded"
+    embedded.mkdir()
+    chunked = tmp_path / "chunked"
+    chunked.mkdir()
+
+    config = KodConfig(
+        sources=[DocumentSource(name="missing", url="https://example.com")],
+        data_dir=tmp_path,
+    )
+
+    run_index(config)
+
+    assert not (tmp_path / "index" / "index_meta.json").exists()
+
+
 def test_run_index_multiple_sources(tmp_path):
     chunked = tmp_path / "chunked"
     chunked.mkdir()

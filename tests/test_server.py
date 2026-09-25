@@ -1,6 +1,8 @@
 """Tests for KOD MCP server."""
 
 import asyncio
+import json
+import logging
 
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -105,6 +107,7 @@ def test_load_app_context_success(mock_te, tmp_path):
     chunks = [_make_chunk()]
     embeddings = _make_embeddings(1)
     _build_test_index(tmp_path, chunks, embeddings)
+    mock_te.get_embedding_size.return_value = 384
 
     app = load_app_context(tmp_path, "BAAI/bge-small-en-v1.5")
 
@@ -119,6 +122,7 @@ def test_load_app_context_mmap_search(mock_te, tmp_path):
     embeddings = _make_embeddings(5)
     chunks = [_make_chunk(chunk_index=i, content=f"Chunk {i}") for i in range(5)]
     _build_test_index(tmp_path, chunks, embeddings)
+    mock_te.get_embedding_size.return_value = 384
 
     app = load_app_context(tmp_path, "BAAI/bge-small-en-v1.5")
 
@@ -148,11 +152,147 @@ def test_load_app_context_empty_index(mock_te, tmp_path):
     index = faiss.IndexFlatIP(384)
     faiss.write_index(index, str(index_dir / "index.faiss"))
     write_chunks([], index_dir / "metadata.jsonl")
+    mock_te.get_embedding_size.return_value = 384
 
     app = load_app_context(tmp_path, "BAAI/bge-small-en-v1.5")
 
     assert app.index.ntotal == 0
     assert len(app.metadata) == 0
+
+
+@patch("kod.server.app.TextEmbedding")
+def test_load_app_context_dimension_mismatch(mock_te, tmp_path):
+    chunks = [_make_chunk()]
+    embeddings = _make_embeddings(1)
+    _build_test_index(tmp_path, chunks, embeddings)
+    mock_te.get_embedding_size.return_value = 128
+
+    with pytest.raises(ValueError, match="128-dim vectors but the FAISS index has 384 dims"):
+        load_app_context(tmp_path, "some/other-model")
+
+
+@patch("kod.server.app.TextEmbedding")
+def test_load_app_context_warns_on_model_mismatch(mock_te, tmp_path, caplog):
+    chunks = [_make_chunk()]
+    embeddings = _make_embeddings(1)
+    _build_test_index(tmp_path, chunks, embeddings)
+    (tmp_path / "index" / "index_meta.json").write_text(
+        json.dumps({"embedding_model": "BAAI/bge-small-en-v1.5"})
+    )
+    mock_te.get_embedding_size.return_value = 384
+
+    with caplog.at_level(logging.WARNING, logger="kod.server.app"):
+        load_app_context(tmp_path, "some/other-model")
+
+    assert "differs from the model used at index time" in caplog.text
+
+
+@patch("kod.server.app.TextEmbedding")
+def test_load_app_context_no_warning_on_matching_model(mock_te, tmp_path, caplog):
+    chunks = [_make_chunk()]
+    embeddings = _make_embeddings(1)
+    _build_test_index(tmp_path, chunks, embeddings)
+    (tmp_path / "index" / "index_meta.json").write_text(
+        json.dumps({"embedding_model": "BAAI/bge-small-en-v1.5"})
+    )
+    mock_te.get_embedding_size.return_value = 384
+
+    with caplog.at_level(logging.WARNING, logger="kod.server.app"):
+        load_app_context(tmp_path, "BAAI/bge-small-en-v1.5")
+
+    assert "differs from the model used at index time" not in caplog.text
+
+
+@patch("kod.server.app.TextEmbedding")
+def test_load_app_context_no_warning_without_meta(mock_te, tmp_path, caplog):
+    chunks = [_make_chunk()]
+    embeddings = _make_embeddings(1)
+    _build_test_index(tmp_path, chunks, embeddings)
+    mock_te.get_embedding_size.return_value = 384
+
+    with caplog.at_level(logging.WARNING, logger="kod.server.app"):
+        load_app_context(tmp_path, "some/other-model")
+
+    assert "differs from the model used at index time" not in caplog.text
+
+
+@patch("kod.server.app.TextEmbedding")
+def test_load_app_context_case_insensitive_model_match(mock_te, tmp_path, caplog):
+    chunks = [_make_chunk()]
+    embeddings = _make_embeddings(1)
+    _build_test_index(tmp_path, chunks, embeddings)
+    (tmp_path / "index" / "index_meta.json").write_text(
+        json.dumps({"embedding_model": "BAAI/bge-small-en-v1.5"})
+    )
+    mock_te.get_embedding_size.return_value = 384
+
+    with caplog.at_level(logging.WARNING, logger="kod.server.app"):
+        load_app_context(tmp_path, "baai/bge-small-en-v1.5")
+
+    assert "differs from the model used at index time" not in caplog.text
+
+
+@patch("kod.server.app.TextEmbedding")
+@pytest.mark.parametrize("body", ["[]", "null", '{"embedding_model":'])
+def test_load_app_context_ignores_malformed_meta(mock_te, tmp_path, caplog, body):
+    chunks = [_make_chunk()]
+    embeddings = _make_embeddings(1)
+    _build_test_index(tmp_path, chunks, embeddings)
+    (tmp_path / "index" / "index_meta.json").write_text(body)
+    mock_te.get_embedding_size.return_value = 384
+
+    with caplog.at_level(logging.WARNING, logger="kod.server.app"):
+        app = load_app_context(tmp_path, "BAAI/bge-small-en-v1.5")
+
+    assert app.index.ntotal == 1
+    assert "malformed index metadata" in caplog.text
+
+
+@patch("kod.server.app.TextEmbedding")
+def test_load_app_context_meta_invalid_utf8(mock_te, tmp_path, caplog):
+    chunks = [_make_chunk()]
+    embeddings = _make_embeddings(1)
+    _build_test_index(tmp_path, chunks, embeddings)
+    (tmp_path / "index" / "index_meta.json").write_bytes(b"\xff\xfe\xff")
+    mock_te.get_embedding_size.return_value = 384
+
+    with caplog.at_level(logging.WARNING, logger="kod.server.app"):
+        app = load_app_context(tmp_path, "BAAI/bge-small-en-v1.5")
+
+    assert app.index.ntotal == 1
+    assert "unreadable or malformed index metadata" in caplog.text
+
+
+@patch("kod.server.app.TextEmbedding")
+@patch("pathlib.Path.read_text", side_effect=OSError("boom"))
+def test_load_app_context_meta_read_failure(mock_read, mock_te, tmp_path, caplog):
+    chunks = [_make_chunk()]
+    embeddings = _make_embeddings(1)
+    _build_test_index(tmp_path, chunks, embeddings)
+    (tmp_path / "index" / "index_meta.json").write_text("{}")
+    mock_te.get_embedding_size.return_value = 384
+
+    with caplog.at_level(logging.WARNING, logger="kod.server.app"):
+        app = load_app_context(tmp_path, "BAAI/bge-small-en-v1.5")
+
+    assert app.index.ntotal == 1
+    assert "unreadable or malformed index metadata" in caplog.text
+
+
+@patch("kod.server.app.TextEmbedding")
+def test_load_app_context_meta_without_model_key(mock_te, tmp_path, caplog):
+    chunks = [_make_chunk()]
+    embeddings = _make_embeddings(1)
+    _build_test_index(tmp_path, chunks, embeddings)
+    (tmp_path / "index" / "index_meta.json").write_text(json.dumps({"other": "value"}))
+    mock_te.get_embedding_size.return_value = 384
+
+    with caplog.at_level(logging.WARNING, logger="kod.server.app"):
+        app = load_app_context(tmp_path, "BAAI/bge-small-en-v1.5")
+
+    assert app.index.ntotal == 1
+    assert "differs from the model used at index time" not in caplog.text
+    assert "malformed index metadata" not in caplog.text
 
 
 # --- embed_queries ---
