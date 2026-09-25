@@ -1,5 +1,6 @@
 """Index step - build FAISS vector index from embeddings."""
 
+import json
 import logging
 
 import faiss
@@ -64,8 +65,10 @@ def run_index(config: KodConfig) -> None:
 
     index_path = index_dir / "index.faiss"
     metadata_path = index_dir / "metadata.jsonl"
+    index_meta_path = index_dir / "index_meta.json"
     faiss.write_index(index, str(index_path))
     write_chunks(all_chunks, metadata_path)
+    index_meta_path.write_text(json.dumps({"embedding_model": config.embedding_model}))
 
     logger.info(
         "[index] Built index with %d vectors (%d dims) at %s",
