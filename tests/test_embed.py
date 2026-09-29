@@ -1,5 +1,6 @@
 """Tests for KOD embedding step."""
 
+from pathlib import Path
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -49,19 +50,24 @@ def _mock_model(dim=384):
 
 
 @patch("kod.pipeline.embed.TextEmbedding")
-def test_get_embedding_model(mock_cls):
-    _get_embedding_model("BAAI/bge-small-en-v1.5")
+def test_get_embedding_model(mock_cls, tmp_path):
+    cache_dir = tmp_path / "model-cache"
 
-    mock_cls.assert_called_once_with(model_name="BAAI/bge-small-en-v1.5")
+    _get_embedding_model("BAAI/bge-small-en-v1.5", cache_dir)
+
+    mock_cls.assert_called_once_with(model_name="BAAI/bge-small-en-v1.5", cache_dir=str(cache_dir))
 
 
 @patch("kod.pipeline.embed.TextEmbedding")
-def test_get_embedding_model_caps_threads(mock_cls, monkeypatch):
+def test_get_embedding_model_caps_threads(mock_cls, monkeypatch, tmp_path):
     monkeypatch.setenv("KOD_EMBED_THREADS", "4")
+    cache_dir = tmp_path / "model-cache"
 
-    _get_embedding_model("BAAI/bge-small-en-v1.5")
+    _get_embedding_model("BAAI/bge-small-en-v1.5", cache_dir)
 
-    mock_cls.assert_called_once_with(model_name="BAAI/bge-small-en-v1.5", threads=4)
+    mock_cls.assert_called_once_with(
+        model_name="BAAI/bge-small-en-v1.5", cache_dir=str(cache_dir), threads=4
+    )
 
 
 # --- _embed_chunks ---
@@ -115,10 +121,29 @@ def test_run_embed(mock_get_model, tmp_path):
 
     run_embed(config)
 
+    mock_get_model.assert_called_once_with("BAAI/bge-small-en-v1.5", tmp_path / "model-cache")
     output = tmp_path / "embedded" / "test-source.npy"
     assert output.exists()
     data = np.load(output)
     assert data.shape == (1, 384)
+
+
+@patch("kod.pipeline.embed._get_embedding_model")
+def test_run_embed_honors_cache_env(mock_get_model, tmp_path, monkeypatch):
+    monkeypatch.setenv("FASTEMBED_CACHE_PATH", "/custom/cache")
+    mock_get_model.return_value = _mock_model()
+    chunked = tmp_path / "chunked"
+    chunked.mkdir()
+    _write_chunks(chunked / "test-source.jsonl", [_make_chunk()])
+
+    config = KodConfig(
+        sources=[DocumentSource(name="test-source", url="https://example.com")],
+        data_dir=tmp_path,
+    )
+
+    run_embed(config)
+
+    mock_get_model.assert_called_once_with("BAAI/bge-small-en-v1.5", Path("/custom/cache"))
 
 
 @patch("kod.pipeline.embed._get_embedding_model")
@@ -231,4 +256,4 @@ def test_run_embed_uses_config_model(mock_get_model, tmp_path):
 
     run_embed(config)
 
-    mock_get_model.assert_called_once_with("BAAI/bge-base-en-v1.5")
+    mock_get_model.assert_called_once_with("BAAI/bge-base-en-v1.5", tmp_path / "model-cache")

@@ -3,6 +3,8 @@
 import logging
 import os
 
+from pathlib import Path
+
 import numpy as np
 
 from fastembed import TextEmbedding
@@ -20,7 +22,12 @@ def run_embed(config: KodConfig) -> None:
     embedded_dir = config.data_dir / "embedded"
     embedded_dir.mkdir(parents=True, exist_ok=True)
 
-    model = _get_embedding_model(config.embedding_model)
+    # Cache the model under the data dir so buildah's `COPY data/model-cache/`
+    # (and local `kod build-image`) reuses it. Honor FASTEMBED_CACHE_PATH when set
+    # so callers can point every load at one stable cache (e.g. benchmark, which
+    # otherwise re-downloads per chunk size into a freshly-wiped data dir).
+    cache_dir = Path(os.environ.get("FASTEMBED_CACHE_PATH") or config.data_dir / "model-cache")
+    model = _get_embedding_model(config.embedding_model, cache_dir)
 
     failures = []
     for source in config.sources:
@@ -55,8 +62,12 @@ def run_embed(config: KodConfig) -> None:
         logger.info("[embed] Embedding complete")
 
 
-def _get_embedding_model(model_name: str) -> TextEmbedding:
+def _get_embedding_model(model_name: str, cache_dir: Path) -> TextEmbedding:
     """Instantiate a FastEmbed text embedding model.
+
+    The model is cached under ``cache_dir`` (inside the data dir) so the same
+    cache the ETL downloads is reused by ``kod build-image`` / buildah's
+    ``COPY`` instead of re-downloading the model during the container build.
 
     When ``KOD_EMBED_THREADS`` is set, cap the ONNX Runtime intra-op thread
     pool. ONNX Runtime otherwise sizes it to the host's physical core count
@@ -65,8 +76,8 @@ def _get_embedding_model(model_name: str) -> TextEmbedding:
     """
     threads = os.environ.get("KOD_EMBED_THREADS")
     if threads:
-        return TextEmbedding(model_name=model_name, threads=int(threads))
-    return TextEmbedding(model_name=model_name)
+        return TextEmbedding(model_name=model_name, cache_dir=str(cache_dir), threads=int(threads))
+    return TextEmbedding(model_name=model_name, cache_dir=str(cache_dir))
 
 
 def _embed_chunks(chunks, model) -> np.ndarray:

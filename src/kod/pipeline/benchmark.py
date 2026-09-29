@@ -1,6 +1,7 @@
 """Benchmark step - evaluate retrieval quality across chunk sizes."""
 
 import logging
+import os
 import shutil
 
 from dataclasses import dataclass
@@ -181,10 +182,21 @@ def run_benchmark(
         chunk_sizes,
     )
 
-    results = []
-    for cs in chunk_sizes:
-        result = evaluate_chunk_size(config, cs, queries, top_k_values)
-        results.append(result)
+    # Each chunk size runs in a freshly-wiped data dir; without a stable cache the
+    # embed step would re-download the model every iteration. Pin one shared cache
+    # (honoring a caller-provided one) so the model is fetched at most once, and
+    # restore the environment afterward so we do not leak into the caller.
+    prev_cache = os.environ.get("FASTEMBED_CACHE_PATH")
+    if prev_cache is None:
+        os.environ["FASTEMBED_CACHE_PATH"] = str(config.data_dir / "model-cache")
+    try:
+        results = []
+        for cs in chunk_sizes:
+            result = evaluate_chunk_size(config, cs, queries, top_k_values)
+            results.append(result)
+    finally:
+        if prev_cache is None:
+            os.environ.pop("FASTEMBED_CACHE_PATH", None)
 
     table = format_results_table(results)
     logger.info("\n%s\n", table)

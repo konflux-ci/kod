@@ -32,8 +32,10 @@ spec:
     - name: source
       description: The shared build workspace holding the cloned source.
   volumes:
-    # Keep the (large) uv venv, uv cache, and FastEmbed model off the small
-    # build-workspace PVC — only data/ needs to persist there for buildah.
+    # Keep the (large) uv venv and uv cache off the small build-workspace PVC.
+    # The FastEmbed model cache is written under data/ (on the PVC) on purpose,
+    # so buildah's `COPY data/model-cache/` reuses it instead of re-downloading
+    # the model during the container build.
     - name: workdir
       emptyDir: {}
     # OpenShift-injected cluster CA bundle. FastEmbed downloads the embedding
@@ -63,8 +65,6 @@ spec:
           value: /var/workdir/venv
         - name: UV_CACHE_DIR
           value: /var/workdir/uv-cache
-        - name: FASTEMBED_CACHE_PATH
-          value: /var/workdir/fastembed-cache
         # Bound ONNX Runtime's intra-op thread pool (it otherwise sizes to the
         # node's physical cores, ignoring the cgroup limit, and OOMs). Match the
         # CPU request. OMP is set defensively for numpy/BLAS.
@@ -98,8 +98,10 @@ spec:
         certifi_pem="$(uv run python -c 'import certifi; print(certifi.where())')"
         cat /mnt/trusted-ca/ca-bundle.crt >> "$certifi_pem"
         uv run kod -c "$(params.config)" pipeline
-        # Sanity check: buildah's `COPY data/index/` needs these to exist.
+        # Sanity check: buildah's `COPY data/index/` and `COPY data/model-cache/`
+        # need these to exist.
         test -f data/index/index.faiss
         test -f data/index/metadata.jsonl
+        test -d data/model-cache
         echo "ETL complete:"
         ls -lh data/index/

@@ -14,11 +14,15 @@ Throughout, substitute your own values:
 
 ## Design
 
-The FAISS index (`data/index/`) is **gitignored** and produced by `kod pipeline`
+The FAISS index (`data/index/`) and the FastEmbed model cache
+(`data/model-cache/`) are **gitignored** and produced by `kod pipeline`
 (extract → transform → embed → index). The `Containerfile` only `COPY`s a
-pre-built index, so a stock git-checkout build has nothing to copy. Rather than
-move the ETL into the Containerfile (which would break local `podman build`), the
-ETL runs as a dedicated in-repo Tekton task (`.tekton/tasks/kod-etl.yaml`).
+pre-built index and model cache, so a stock git-checkout build has nothing to
+copy. Rather than move the ETL into the Containerfile (which would break local
+`podman build`), the ETL runs as a dedicated in-repo Tekton task
+(`.tekton/tasks/kod-etl.yaml`). The embed step writes the model cache under
+`data/` so buildah (and local `kod build-image`) reuses it instead of
+re-downloading the model during the container build.
 
 The generated `docker-build` pipeline shares the source between tasks via a
 **`workspace` PVC** (git-clone checks out into `$(workspaces.output.path)/source`;
@@ -27,9 +31,10 @@ mounts that same workspace and runs `kod -c config.production.yaml pipeline` in
 the checkout, writing `data/index/` in place. `buildah` then runs next and its
 `COPY data/index/` finds the freshly generated index. No trusted-artifact
 plumbing is needed. To keep the small workspace PVC from filling up, the ETL puts
-the uv venv, uv cache, and FastEmbed model on an `emptyDir` (`/var/workdir`); only
-`data/` lands on the PVC (bumped 1Gi → 5Gi). Local builds are unaffected — devs
-still run `kod pipeline` + `kod build-image`.
+the uv venv and uv cache on an `emptyDir` (`/var/workdir`); only `data/` lands on
+the PVC (bumped 1Gi → 5Gi) — including `data/model-cache/`, which buildah `COPY`s
+into the image. Local builds are unaffected — devs still run `kod pipeline` +
+`kod build-image`.
 
 ## Files
 
@@ -85,8 +90,8 @@ data: {}
    `.tekton/kod-pull-request.yaml` in this repo; do the edits on the generated
    branch so the bundle SHAs stay current — do not hand-copy an older pipeline):
    - `hermetic` stays `"false"` and `prefetch-input` `""` (pipeline defaults):
-     the ETL and `uv sync` need network, and the `Containerfile` build itself
-     downloads the FastEmbed model from Hugging Face.
+     the ETL and `uv sync` need network. (The `Containerfile` build itself no
+     longer downloads the model — it reuses the cache the ETL produced.)
    - Add `spec.timeouts.pipeline: 2h0m0s` (the default 1h is too tight for the
      slow embedding step).
    - Register the two in-repo tasks via the PaC annotation on both PipelineRuns:
@@ -123,15 +128,14 @@ data: {}
 
    Two environment-specific gotchas the ETL task already handles, worth knowing
    if you adapt it:
-   - **TLS to Hugging Face.** Both the ETL task and the `Containerfile` build
-     download the FastEmbed model from `huggingface.co`. If your build network
-     terminates TLS with an internal CA, the download fails under Python's
-     bundled `certifi`. The ETL task mounts the cluster `trusted-ca` ConfigMap
-     and appends it to the venv's `certifi` bundle (httpx, used by
-     `huggingface_hub`, ignores `SSL_CERT_FILE`). Note: the `Containerfile`'s
-     own model download does **not** yet get this CA fix, so on a
-     TLS-intercepting network the container build can still fail — a follow-up
-     will reuse the ETL's model cache instead of downloading twice.
+   - **TLS to Hugging Face.** The ETL task downloads the FastEmbed model from
+     `huggingface.co`. If your build network terminates TLS with an internal CA,
+     the download fails under Python's bundled `certifi`. The ETL task mounts the
+     cluster `trusted-ca` ConfigMap and appends it to the venv's `certifi` bundle
+     (httpx, used by `huggingface_hub`, ignores `SSL_CERT_FILE`). The
+     `Containerfile` build no longer downloads the model — it `COPY`s the cache
+     the ETL wrote under `data/model-cache/` (and runs with `HF_HUB_OFFLINE=1`),
+     so there is only one download per build and no second TLS dependency.
    - **Embed step memory.** FastEmbed's default batch size drives O(seq²)
      attention memory and can OOM the embed step. The task sets
      `KOD_EMBED_BATCH_SIZE` (and `KOD_EMBED_THREADS` to cap the ONNX Runtime
