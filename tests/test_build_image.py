@@ -1,6 +1,7 @@
 """Tests for the build-image pipeline step."""
 
 import os
+import shutil
 import subprocess
 
 from unittest.mock import patch
@@ -17,6 +18,9 @@ def build_dir(tmp_path):
     index_dir.mkdir(parents=True)
     (index_dir / "index.faiss").write_bytes(b"fake")
     (index_dir / "metadata.jsonl").write_bytes(b"fake")
+    model_cache = tmp_path / "data" / "model-cache"
+    model_cache.mkdir()
+    (model_cache / "files_metadata.json").write_text("{}")
     (tmp_path / "Containerfile").write_text("FROM scratch\n")
     prev = os.getcwd()
     os.chdir(tmp_path)
@@ -67,6 +71,18 @@ def test_missing_index_faiss(build_dir):
 def test_missing_metadata(build_dir):
     (build_dir / "data" / "index" / "metadata.jsonl").unlink()
     with pytest.raises(FileNotFoundError, match="metadata.jsonl"):
+        run_build_image(data_dir="data")
+
+
+def test_missing_model_cache(build_dir):
+    shutil.rmtree(build_dir / "data" / "model-cache")
+    with pytest.raises(FileNotFoundError, match="model-cache"):
+        run_build_image(data_dir="data")
+
+
+def test_empty_model_cache(build_dir):
+    (build_dir / "data" / "model-cache" / "files_metadata.json").unlink()
+    with pytest.raises(FileNotFoundError, match="missing or empty"):
         run_build_image(data_dir="data")
 
 

@@ -1,5 +1,6 @@
 """Tests for KOD benchmark module."""
 
+import os
 import textwrap
 
 from unittest.mock import MagicMock
@@ -371,7 +372,8 @@ class TestRunBenchmark:
             run_benchmark(config, [1000], queries_file, [5])
 
     @patch("kod.pipeline.benchmark.evaluate_chunk_size")
-    def test_runs_for_each_chunk_size(self, mock_eval, tmp_path):
+    def test_runs_for_each_chunk_size(self, mock_eval, tmp_path, monkeypatch):
+        monkeypatch.delenv("FASTEMBED_CACHE_PATH", raising=False)
         config = KodConfig(
             sources=[DocumentSource(name="test", url="https://example.com/docs.git")],
             data_dir=tmp_path / "data",
@@ -397,3 +399,34 @@ class TestRunBenchmark:
         results = run_benchmark(config, [500, 1000, 1500], queries_file, [5])
         assert len(results) == 3
         assert mock_eval.call_count == 3
+        # The pinned cache env is restored (unset) after the run.
+        assert "FASTEMBED_CACHE_PATH" not in os.environ
+
+    @patch("kod.pipeline.benchmark.evaluate_chunk_size")
+    def test_preserves_existing_cache_env(self, mock_eval, tmp_path, monkeypatch):
+        monkeypatch.setenv("FASTEMBED_CACHE_PATH", "/caller/cache")
+        config = KodConfig(
+            sources=[DocumentSource(name="test", url="https://example.com/docs.git")],
+            data_dir=tmp_path / "data",
+        )
+        extracted = tmp_path / "data" / "extracted"
+        extracted.mkdir(parents=True)
+        (extracted / "test.jsonl").write_text("{}\n")
+
+        queries_file = tmp_path / "queries.yaml"
+        queries_file.write_text(
+            textwrap.dedent("""\
+            queries:
+              - query: "test"
+                expected_sources:
+                  - test
+        """)
+        )
+
+        mock_eval.return_value = ChunkSizeResult(
+            chunk_size=1000, chunk_count=10, recall_at_k={5: 0.8}
+        )
+
+        run_benchmark(config, [1000], queries_file, [5])
+        # A caller-provided cache is left untouched.
+        assert os.environ["FASTEMBED_CACHE_PATH"] == "/caller/cache"

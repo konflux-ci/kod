@@ -40,6 +40,17 @@ def run_build_image(
                 f"Required artifact not found: {path}. Run the ETL pipeline first (kod pipeline)."
             )
 
+    # The Containerfile COPYs the FastEmbed model cache instead of downloading it
+    # (the runtime image runs offline), so the ETL must have populated it first.
+    # An empty directory would build a broken, non-recoverable image, so require
+    # actual contents rather than mere existence.
+    model_cache_dir = data_path / "model-cache"
+    if not model_cache_dir.is_dir() or not any(model_cache_dir.iterdir()):
+        raise FileNotFoundError(
+            f"Model cache is missing or empty: {model_cache_dir}. "
+            "Run the ETL pipeline first (kod pipeline)."
+        )
+
     containerfile_path = Path(containerfile)
     if not containerfile_path.exists():
         raise FileNotFoundError(f"Containerfile not found: {containerfile_path}")
