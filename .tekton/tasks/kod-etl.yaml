@@ -38,12 +38,16 @@ spec:
     # the model during the container build.
     - name: workdir
       emptyDir: {}
-    # OpenShift-injected cluster CA bundle. FastEmbed downloads the embedding
-    # model from huggingface.co, whose chain does not verify under Python's
-    # bundled certifi in this build network; the cluster bundle does.
+    # Optional OpenShift-injected cluster CA bundle. On a TLS-intercepting build
+    # network, FastEmbed's model download from huggingface.co does not verify
+    # under Python's bundled certifi; the cluster bundle does. The ConfigMap is
+    # optional so public-CA tenants (which need no custom trust) run with zero
+    # setup — the pod schedules without it and the run-etl step skips the CA
+    # wiring when the file is absent.
     - name: trusted-ca
       configMap:
         name: trusted-ca
+        optional: true
         items:
           - key: ca-bundle.crt
             path: ca-bundle.crt
@@ -76,11 +80,6 @@ spec:
         # (256) OOMs even at 8Gi. 32 keeps peak well under the limit.
         - name: KOD_EMBED_BATCH_SIZE
           value: "32"
-        # git/requests/OpenSSL-based clients honor these directly.
-        - name: SSL_CERT_FILE
-          value: /mnt/trusted-ca/ca-bundle.crt
-        - name: REQUESTS_CA_BUNDLE
-          value: /mnt/trusted-ca/ca-bundle.crt
       computeResources:
         requests:
           cpu: "4"
@@ -91,12 +90,27 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
+        # Trust a custom cluster CA only if the (optional) trusted-ca ConfigMap
+        # was mounted. pip/uv and git/requests/OpenSSL-based clients honor the
+        # *_CA_* env vars directly, so export them up front — before the
+        # network-dependent pip install / uv sync run on a TLS-intercepting
+        # build network. On a public-CA tenant the ConfigMap is absent and we
+        # skip this — pointing these at a missing file would break TLS instead
+        # of fixing it.
+        ca_bundle=/mnt/trusted-ca/ca-bundle.crt
+        if [ -f "$ca_bundle" ]; then
+          export SSL_CERT_FILE="$ca_bundle"
+          export REQUESTS_CA_BUNDLE="$ca_bundle"
+        fi
         pip install --no-cache-dir uv
         uv sync --locked --no-dev
         # huggingface_hub uses httpx, which trusts certifi's bundle (not
-        # SSL_CERT_FILE). Append the cluster CA so the model download verifies.
-        certifi_pem="$(uv run python -c 'import certifi; print(certifi.where())')"
-        cat /mnt/trusted-ca/ca-bundle.crt >> "$certifi_pem"
+        # SSL_CERT_FILE), so also append the CA there once the venv's certifi
+        # exists (after uv sync).
+        if [ -f "$ca_bundle" ]; then
+          certifi_pem="$(uv run python -c 'import certifi; print(certifi.where())')"
+          cat "$ca_bundle" >> "$certifi_pem"
+        fi
         uv run kod -c "$(params.config)" pipeline
         # Sanity check: buildah's `COPY data/index/` and `COPY data/model-cache/`
         # need these to exist.
