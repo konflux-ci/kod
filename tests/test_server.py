@@ -13,6 +13,7 @@ import pytest
 
 from conftest import make_ctx
 
+from kod.config import DEFAULT_EMBEDDING_MODEL
 from kod.models import DocumentChunk
 from kod.pipeline.io import write_chunks
 from kod.server import tools as _tools_module
@@ -293,6 +294,77 @@ def test_load_app_context_meta_without_model_key(mock_te, tmp_path, caplog):
     assert app.index.ntotal == 1
     assert "differs from the model used at index time" not in caplog.text
     assert "malformed index metadata" not in caplog.text
+
+
+@patch("kod.server.app.TextEmbedding")
+def test_load_app_context_defaults_to_recorded_model(mock_te, tmp_path):
+    chunks = [_make_chunk()]
+    embeddings = _make_embeddings(1)
+    _build_test_index(tmp_path, chunks, embeddings)
+    (tmp_path / "index" / "index_meta.json").write_text(
+        json.dumps({"embedding_model": "recorded/model-384d"})
+    )
+    mock_te.get_embedding_size.return_value = 384
+
+    load_app_context(tmp_path)  # no override
+
+    mock_te.get_embedding_size.assert_called_once_with("recorded/model-384d")
+    mock_te.assert_called_once_with(model_name="recorded/model-384d")
+
+
+@patch("kod.server.app.TextEmbedding")
+def test_load_app_context_override_wins_over_recorded_model(mock_te, tmp_path, caplog):
+    chunks = [_make_chunk()]
+    embeddings = _make_embeddings(1)
+    _build_test_index(tmp_path, chunks, embeddings)
+    (tmp_path / "index" / "index_meta.json").write_text(
+        json.dumps({"embedding_model": "recorded/model-384d"})
+    )
+    mock_te.get_embedding_size.return_value = 384
+
+    with caplog.at_level(logging.WARNING, logger="kod.server.app"):
+        load_app_context(tmp_path, "override/model-384d")
+
+    mock_te.assert_called_once_with(model_name="override/model-384d")
+    assert "differs from the model used at index time" in caplog.text
+
+
+@patch("kod.server.app.TextEmbedding")
+def test_load_app_context_falls_back_to_default_without_record(mock_te, tmp_path):
+    chunks = [_make_chunk()]
+    embeddings = _make_embeddings(1)
+    _build_test_index(tmp_path, chunks, embeddings)
+    mock_te.get_embedding_size.return_value = 384
+
+    load_app_context(tmp_path)  # no override, no index_meta.json
+
+    mock_te.assert_called_once_with(model_name=DEFAULT_EMBEDDING_MODEL)
+
+
+@patch("kod.server.app.TextEmbedding")
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{}",
+        "null",
+        "[]",
+        '{"embedding_model": 123}',
+        '{"embedding_model": ""}',
+        '{"embedding_model":',
+    ],
+)
+def test_load_app_context_raises_on_unusable_record_without_override(mock_te, tmp_path, body):
+    """A present-but-unusable record must fail loudly, not silently load the default."""
+    chunks = [_make_chunk()]
+    embeddings = _make_embeddings(1)
+    _build_test_index(tmp_path, chunks, embeddings)
+    (tmp_path / "index" / "index_meta.json").write_text(body)
+    mock_te.get_embedding_size.return_value = 384
+
+    with pytest.raises(ValueError, match="no usable embedding model"):
+        load_app_context(tmp_path)  # no override
+
+    mock_te.assert_not_called()
 
 
 # --- embed_queries ---
@@ -1356,7 +1428,7 @@ def test_run_server_defaults(mock_mcp, mock_configure):
     run_server()
 
     assert server._server_data_dir == "data"
-    assert server._server_embedding_model == "BAAI/bge-small-en-v1.5"
+    assert server._server_embedding_model is None
     mock_configure.assert_called_once_with(rrf_k=60, max_queries=5, max_top_k=20)
     mock_mcp.run.assert_called_once_with(
         transport="streamable-http",

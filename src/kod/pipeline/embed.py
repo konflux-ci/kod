@@ -1,5 +1,6 @@
 """Embed step - generate vector embeddings for document chunks."""
 
+import json
 import logging
 import os
 
@@ -32,6 +33,18 @@ def run_embed(config: KodConfig) -> None:
     failures = []
     for source in config.sources:
         input_path = chunked_dir / f"{source.name}.jsonl"
+        output_path = embedded_dir / f"{source.name}.npy"
+        meta_path = embedded_dir / f"{source.name}.meta.json"
+
+        # Invalidate any previous output for this source up front, before reading
+        # or embedding. Otherwise a failed or skipped re-embed would leave stale
+        # vectors (and a sidecar naming the old model) that run_index could pair
+        # with freshly-regenerated chunks when their counts happen to match. With
+        # the files gone, a failure instead drops the source (run_index skips a
+        # source with no .npy) rather than indexing stale vectors.
+        output_path.unlink(missing_ok=True)
+        meta_path.unlink(missing_ok=True)
+
         if not input_path.exists():
             logger.warning("[embed] No chunked data for '%s', skipping", source.name)
             continue
@@ -43,8 +56,15 @@ def run_embed(config: KodConfig) -> None:
                 logger.warning("[embed] No chunks in '%s', skipping", source.name)
                 continue
             embeddings = _embed_chunks(chunks, model)
-            output_path = embedded_dir / f"{source.name}.npy"
             np.save(output_path, embeddings)
+            # Record which model produced these vectors so run_index can verify
+            # provenance. Written after the .npy so an interrupted write leaves a
+            # missing sidecar (rejected by run_index), never a stale one.
+            meta_path.write_text(
+                json.dumps(
+                    {"embedding_model": config.embedding_model, "dim": int(embeddings.shape[1])}
+                )
+            )
             logger.info(
                 "[embed] Wrote %d embedding(s) (%d dims) to %s",
                 embeddings.shape[0],

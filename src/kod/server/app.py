@@ -11,6 +11,7 @@ import numpy as np
 
 from fastembed import TextEmbedding
 
+from kod.config import DEFAULT_EMBEDDING_MODEL
 from kod.models import DocumentChunk
 from kod.pipeline.io import read_chunks
 
@@ -45,8 +46,16 @@ def _read_indexed_model(path: Path) -> str | None:
     return model if isinstance(model, str) else None
 
 
-def load_app_context(data_dir: Path, embedding_model: str) -> AppContext:
-    """Load FAISS index, metadata, and embedding model."""
+def load_app_context(data_dir: Path, embedding_model: str | None = None) -> AppContext:
+    """Load FAISS index, metadata, and embedding model.
+
+    ``embedding_model`` is an explicit override (``--model`` / ``KOD_EMBEDDING_MODEL``).
+    When it is ``None``, the packaged index is the source of truth: the model
+    recorded in ``index_meta.json`` is loaded. The default is used only when the
+    file is *absent* (back-compat with older indexes); a present-but-unusable
+    record is a hard error rather than a silent fall back to the default, which
+    could load the wrong (same-dimension) model and degrade search silently.
+    """
     index_path = data_dir / "index" / "index.faiss"
     metadata_path = data_dir / "index" / "metadata.jsonl"
     index_meta_path = data_dir / "index" / "index_meta.json"
@@ -61,32 +70,50 @@ def load_app_context(data_dir: Path, embedding_model: str) -> AppContext:
         msg = f"Metadata count ({len(metadata)}) does not match index vector count ({index.ntotal})"
         raise ValueError(msg)
 
-    if index_meta_path.exists():
-        indexed_model = _read_indexed_model(index_meta_path)
+    index_meta_exists = index_meta_path.exists()
+    indexed_model = _read_indexed_model(index_meta_path) if index_meta_exists else None
+
+    if embedding_model is not None:
+        effective_model = embedding_model
         # FastEmbed resolves model names case-insensitively, so compare that way.
-        if indexed_model and indexed_model.lower() != embedding_model.lower():
+        if indexed_model and indexed_model.lower() != effective_model.lower():
             logger.warning(
                 "Configured embedding model '%s' differs from the model used at index "
                 "time '%s'; query and document vectors may be incompatible, degrading "
                 "search rankings",
-                embedding_model,
+                effective_model,
                 indexed_model,
             )
+    elif indexed_model:
+        # No override: the recorded model is the source of truth (the offline
+        # model cache always contains it).
+        effective_model = indexed_model
+    elif index_meta_exists:
+        # The record exists but names no usable model; refuse rather than guess
+        # the default, which could silently load a wrong same-dimension model.
+        msg = (
+            f"{index_meta_path} exists but records no usable embedding model; rebuild "
+            f"the index or start the server with an explicit --model / KOD_EMBEDDING_MODEL"
+        )
+        raise ValueError(msg)
+    else:
+        # No record at all: older index, fall back to the default (back-compat).
+        effective_model = DEFAULT_EMBEDDING_MODEL
 
     # Check dimensions from FastEmbed's registry before loading the model, so a
     # mismatched-but-valid model fails fast instead of paying a full ONNX load
     # (which can OOM a memory-capped pod) only to be rejected afterwards.
-    model_dim = TextEmbedding.get_embedding_size(embedding_model)
+    model_dim = TextEmbedding.get_embedding_size(effective_model)
     if model_dim != index.d:
         msg = (
-            f"Embedding model '{embedding_model}' produces {model_dim}-dim "
+            f"Embedding model '{effective_model}' produces {model_dim}-dim "
             f"vectors but the FAISS index has {index.d} dims; the index must be rebuilt "
             f"with this model or the server started with the model used to build it"
         )
         raise ValueError(msg)
 
-    logger.info("Loading embedding model: %s", embedding_model)
-    model = TextEmbedding(model_name=embedding_model)
+    logger.info("Loading embedding model: %s", effective_model)
+    model = TextEmbedding(model_name=effective_model)
 
     logger.info(
         "AppContext ready: %d vectors, %d dims",

@@ -17,10 +17,10 @@ from kod.server.tools import search_knowledge
 logger = logging.getLogger(__name__)
 
 _DEFAULT_DATA_DIR = "data"
-_DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 
 _server_data_dir: str = _DEFAULT_DATA_DIR
-_server_embedding_model: str = _DEFAULT_EMBEDDING_MODEL
+# None means "no override": load_app_context resolves the model from the index.
+_server_embedding_model: str | None = None
 
 
 @asynccontextmanager
@@ -43,7 +43,7 @@ mcp.tool()(get_document)
 
 def run_server(
     data_dir: str = _DEFAULT_DATA_DIR,
-    embedding_model: str = _DEFAULT_EMBEDDING_MODEL,
+    embedding_model: str | None = None,
     # Reciprocal Rank Fusion constant — higher values flatten score differences
     # across ranked lists, lower values amplify top-ranked results.
     rrf_k: int = 60,
