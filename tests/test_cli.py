@@ -63,7 +63,7 @@ def test_serve_runs(mock_run, runner, tmp_path):
     assert result.exit_code == 0
     mock_run.assert_called_once_with(
         data_dir=str(tmp_path),
-        embedding_model="BAAI/bge-small-en-v1.5",
+        embedding_model=None,
         rrf_k=60,
         max_queries=5,
         max_top_k=20,
@@ -102,7 +102,7 @@ def test_serve_tuning_flags(mock_run, runner, tmp_path):
     assert result.exit_code == 0
     mock_run.assert_called_once_with(
         data_dir=str(tmp_path),
-        embedding_model="BAAI/bge-small-en-v1.5",
+        embedding_model=None,
         rrf_k=30,
         max_queries=3,
         max_top_k=10,

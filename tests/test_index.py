@@ -2,9 +2,13 @@
 
 import json
 
+from unittest.mock import patch
+
 import faiss
 import numpy as np
+import pytest
 
+from kod.config import DEFAULT_EMBEDDING_MODEL
 from kod.config import DocumentSource
 from kod.config import KodConfig
 from kod.models import DocumentChunk
@@ -38,6 +42,14 @@ def _make_embeddings(n, dim=384):
     vecs = rng.random((n, dim), dtype=np.float32)
     norms = np.linalg.norm(vecs, axis=1, keepdims=True)
     return vecs / norms
+
+
+def _save_embeddings(embedded_dir, name, embeddings, model=DEFAULT_EMBEDDING_MODEL):
+    """Write a source's `.npy` and its provenance sidecar, like run_embed does."""
+    np.save(embedded_dir / f"{name}.npy", embeddings)
+    (embedded_dir / f"{name}.meta.json").write_text(
+        json.dumps({"embedding_model": model, "dim": int(embeddings.shape[1])})
+    )
 
 
 # --- _build_index ---
@@ -84,7 +96,7 @@ def test_run_index(tmp_path):
 
     embedded = tmp_path / "embedded"
     embedded.mkdir()
-    np.save(embedded / "test-source.npy", embeddings)
+    _save_embeddings(embedded, "test-source", embeddings)
 
     config = KodConfig(
         sources=[DocumentSource(name="test-source", url="https://example.com")],
@@ -115,7 +127,7 @@ def test_run_index_writes_index_meta(tmp_path):
 
     embedded = tmp_path / "embedded"
     embedded.mkdir()
-    np.save(embedded / "test-source.npy", embeddings)
+    _save_embeddings(embedded, "test-source", embeddings, model="custom/embedding-model")
 
     config = KodConfig(
         sources=[DocumentSource(name="test-source", url="https://example.com")],
@@ -154,7 +166,7 @@ def test_run_index_multiple_sources(tmp_path):
     for name in ("source-a", "source-b"):
         chunks = [_make_chunk(source_name=name, content=f"From {name}")]
         _write_chunks(chunked / f"{name}.jsonl", chunks)
-        np.save(embedded / f"{name}.npy", _make_embeddings(1))
+        _save_embeddings(embedded, name, _make_embeddings(1))
 
     config = KodConfig(
         sources=[
@@ -218,7 +230,7 @@ def test_run_index_skips_mismatched_counts(tmp_path):
 
     embedded = tmp_path / "embedded"
     embedded.mkdir()
-    np.save(embedded / "test-source.npy", _make_embeddings(3))
+    _save_embeddings(embedded, "test-source", _make_embeddings(3))
 
     config = KodConfig(
         sources=[DocumentSource(name="test-source", url="https://example.com")],
@@ -237,10 +249,10 @@ def test_run_index_mismatch_skips_but_valid_source_indexed(tmp_path):
     embedded.mkdir()
 
     _write_chunks(chunked / "bad.jsonl", [_make_chunk(source_name="bad")])
-    np.save(embedded / "bad.npy", _make_embeddings(3))
+    _save_embeddings(embedded, "bad", _make_embeddings(3))
 
     _write_chunks(chunked / "good.jsonl", [_make_chunk(source_name="good")])
-    np.save(embedded / "good.npy", _make_embeddings(1))
+    _save_embeddings(embedded, "good", _make_embeddings(1))
 
     config = KodConfig(
         sources=[
@@ -266,11 +278,16 @@ def test_run_index_continues_after_corrupt_file(tmp_path):
     embedded = tmp_path / "embedded"
     embedded.mkdir()
 
+    # Valid provenance so the source passes the model check and fails later, at
+    # np.load, exercising the load-failure path rather than the provenance guard.
     (embedded / "corrupt.npy").write_bytes(b"not a numpy file")
+    (embedded / "corrupt.meta.json").write_text(
+        json.dumps({"embedding_model": DEFAULT_EMBEDDING_MODEL, "dim": 384})
+    )
     _write_chunks(chunked / "corrupt.jsonl", [_make_chunk(source_name="corrupt")])
 
     _write_chunks(chunked / "good.jsonl", [_make_chunk(source_name="good")])
-    np.save(embedded / "good.npy", _make_embeddings(1))
+    _save_embeddings(embedded, "good", _make_embeddings(1))
 
     config = KodConfig(
         sources=[
@@ -296,7 +313,7 @@ def test_run_index_mmap_loading(tmp_path):
 
     embedded = tmp_path / "embedded"
     embedded.mkdir()
-    np.save(embedded / "test-source.npy", embeddings)
+    _save_embeddings(embedded, "test-source", embeddings)
 
     config = KodConfig(
         sources=[DocumentSource(name="test-source", url="https://example.com")],
@@ -327,7 +344,7 @@ def test_run_index_metadata_position_aligned(tmp_path):
 
     embedded = tmp_path / "embedded"
     embedded.mkdir()
-    np.save(embedded / "test-source.npy", embeddings)
+    _save_embeddings(embedded, "test-source", embeddings)
 
     config = KodConfig(
         sources=[DocumentSource(name="test-source", url="https://example.com")],
@@ -359,3 +376,159 @@ def test_run_index_no_embeddings_found(tmp_path):
     run_index(config)
 
     assert not (tmp_path / "index" / "index.faiss").exists()
+
+
+# --- run_index provenance verification ---
+
+
+def test_run_index_raises_on_model_change_between_embed_and_index(tmp_path):
+    """A same-dimension model swap between embed and index must abort the build."""
+    chunked = tmp_path / "chunked"
+    chunked.mkdir()
+    _write_chunks(chunked / "test-source.jsonl", [_make_chunk()])
+
+    embedded = tmp_path / "embedded"
+    embedded.mkdir()
+    # Embedded with one model...
+    _save_embeddings(embedded, "test-source", _make_embeddings(1), model="other/model-384d")
+
+    # ...but indexed with another (same dimension, so np.vstack would succeed).
+    config = KodConfig(
+        sources=[DocumentSource(name="test-source", url="https://example.com")],
+        data_dir=tmp_path,
+        embedding_model="BAAI/bge-small-en-v1.5",
+    )
+
+    with pytest.raises(ValueError, match="provenance check failed"):
+        run_index(config)
+
+    assert not (tmp_path / "index" / "index.faiss").exists()
+    assert not (tmp_path / "index" / "index_meta.json").exists()
+
+
+def test_run_index_raises_on_stale_npy_without_sidecar(tmp_path):
+    """A stale `.npy` left by a failed re-embed (no sidecar) must abort the build."""
+    chunked = tmp_path / "chunked"
+    chunked.mkdir()
+    _write_chunks(chunked / "test-source.jsonl", [_make_chunk()])
+
+    embedded = tmp_path / "embedded"
+    embedded.mkdir()
+    np.save(embedded / "test-source.npy", _make_embeddings(1))  # no sidecar
+
+    config = KodConfig(
+        sources=[DocumentSource(name="test-source", url="https://example.com")],
+        data_dir=tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="provenance check failed"):
+        run_index(config)
+
+    assert not (tmp_path / "index" / "index.faiss").exists()
+
+
+@pytest.mark.parametrize("body", ["not json", "[]", "null", '{"embedding_model": 123}'])
+def test_run_index_raises_on_malformed_sidecar(tmp_path, body):
+    chunked = tmp_path / "chunked"
+    chunked.mkdir()
+    _write_chunks(chunked / "test-source.jsonl", [_make_chunk()])
+
+    embedded = tmp_path / "embedded"
+    embedded.mkdir()
+    np.save(embedded / "test-source.npy", _make_embeddings(1))
+    (embedded / "test-source.meta.json").write_text(body)
+
+    config = KodConfig(
+        sources=[DocumentSource(name="test-source", url="https://example.com")],
+        data_dir=tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="provenance check failed"):
+        run_index(config)
+
+
+def test_run_index_raises_naming_only_offending_source(tmp_path):
+    """One mismatched source aborts the whole build and is named in the error."""
+    chunked = tmp_path / "chunked"
+    chunked.mkdir()
+    embedded = tmp_path / "embedded"
+    embedded.mkdir()
+
+    _write_chunks(chunked / "good.jsonl", [_make_chunk(source_name="good")])
+    _save_embeddings(embedded, "good", _make_embeddings(1))
+
+    _write_chunks(chunked / "wrong.jsonl", [_make_chunk(source_name="wrong")])
+    _save_embeddings(embedded, "wrong", _make_embeddings(1), model="other/model-384d")
+
+    config = KodConfig(
+        sources=[
+            DocumentSource(name="good", url="https://example.com/good"),
+            DocumentSource(name="wrong", url="https://example.com/wrong"),
+        ],
+        data_dir=tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="wrong") as excinfo:
+        run_index(config)
+
+    assert "good" not in str(excinfo.value)
+    assert not (tmp_path / "index" / "index.faiss").exists()
+
+
+def test_run_index_replaces_stale_index_meta_atomically(tmp_path):
+    chunks = [_make_chunk()]
+    chunked = tmp_path / "chunked"
+    chunked.mkdir()
+    _write_chunks(chunked / "test-source.jsonl", chunks)
+    embedded = tmp_path / "embedded"
+    embedded.mkdir()
+    _save_embeddings(embedded, "test-source", _make_embeddings(1), model="custom/embedding-model")
+
+    # A record from a previous build with a different model.
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    (index_dir / "index_meta.json").write_text(json.dumps({"embedding_model": "old/model"}))
+
+    config = KodConfig(
+        sources=[DocumentSource(name="test-source", url="https://example.com")],
+        data_dir=tmp_path,
+        embedding_model="custom/embedding-model",
+    )
+
+    run_index(config)
+
+    assert json.loads((index_dir / "index_meta.json").read_text()) == {
+        "embedding_model": "custom/embedding-model"
+    }
+    # The atomic temp file is not left behind.
+    assert not (index_dir / "index_meta.json.tmp").exists()
+
+
+def test_run_index_interrupted_rebuild_leaves_no_stale_meta(tmp_path):
+    """A crash mid-rebuild must not leave an old model record beside new vectors."""
+    chunks = [_make_chunk()]
+    chunked = tmp_path / "chunked"
+    chunked.mkdir()
+    _write_chunks(chunked / "test-source.jsonl", chunks)
+    embedded = tmp_path / "embedded"
+    embedded.mkdir()
+    _save_embeddings(embedded, "test-source", _make_embeddings(1))
+
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    (index_dir / "index_meta.json").write_text(json.dumps({"embedding_model": "old/model"}))
+
+    config = KodConfig(
+        sources=[DocumentSource(name="test-source", url="https://example.com")],
+        data_dir=tmp_path,
+    )
+
+    with (
+        patch("kod.pipeline.index.write_chunks", side_effect=OSError("boom")),
+        pytest.raises(OSError),
+    ):
+        run_index(config)
+
+    # The stale record was cleared before the crash, so serve falls back to the
+    # back-compat default rather than trusting the old model against new vectors.
+    assert not (index_dir / "index_meta.json").exists()
