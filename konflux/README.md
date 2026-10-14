@@ -52,12 +52,14 @@ into the image. Local builds are unaffected — devs still run `kod pipeline` +
 
 ## Prerequisites
 
-The ETL task (`.tekton/tasks/kod-etl.yaml`) mounts a ConfigMap named
-`trusted-ca` (key `ca-bundle.crt`) and appends it to the model-download trust
-store. This mount is currently **required**: a tenant without that exact
-ConfigMap fails the `kod-etl` pod before it starts, even on a public-CA network.
-Ensure it exists in your tenant namespace — on OpenShift, a cluster-CA-injected
-ConfigMap works:
+None for a public-CA tenant — KOD onboards with zero extra setup.
+
+**Internal / TLS-intercepting networks only:** the ETL task downloads the
+FastEmbed model from `huggingface.co`. If your build network terminates TLS with
+an internal CA, provide a ConfigMap named `trusted-ca` (key `ca-bundle.crt`) in
+your tenant namespace and the ETL task appends it to the model-download trust
+store. The mount is **optional**, so tenants that do not need it can skip this.
+On OpenShift, a cluster-CA-injected ConfigMap works:
 
 ```yaml
 apiVersion: v1
@@ -68,8 +70,6 @@ metadata:
     config.openshift.io/inject-trusted-cabundle: "true"
 data: {}
 ```
-
-(A follow-up will make this mount optional so public-CA tenants need no setup.)
 
 ## Onboarding steps
 
@@ -131,8 +131,9 @@ data: {}
    - **TLS to Hugging Face.** The ETL task downloads the FastEmbed model from
      `huggingface.co`. If your build network terminates TLS with an internal CA,
      the download fails under Python's bundled `certifi`. The ETL task mounts the
-     cluster `trusted-ca` ConfigMap and appends it to the venv's `certifi` bundle
-     (httpx, used by `huggingface_hub`, ignores `SSL_CERT_FILE`). The
+     cluster `trusted-ca` ConfigMap (optional — see Prerequisites) and, when
+     present, appends it to the venv's `certifi` bundle (httpx, used by
+     `huggingface_hub`, ignores `SSL_CERT_FILE`). The
      `Containerfile` build no longer downloads the model — it `COPY`s the cache
      the ETL wrote under `data/model-cache/` (and runs with `HF_HUB_OFFLINE=1`),
      so there is only one download per build and no second TLS dependency.
