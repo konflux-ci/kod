@@ -1,5 +1,7 @@
 """Tests for KOD embedding step."""
 
+import json
+
 from pathlib import Path
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -126,6 +128,106 @@ def test_run_embed(mock_get_model, tmp_path):
     assert output.exists()
     data = np.load(output)
     assert data.shape == (1, 384)
+
+
+@patch("kod.pipeline.embed._get_embedding_model")
+def test_run_embed_writes_provenance_sidecar(mock_get_model, tmp_path):
+    mock_get_model.return_value = _mock_model()
+    chunked = tmp_path / "chunked"
+    chunked.mkdir()
+    _write_chunks(chunked / "test-source.jsonl", [_make_chunk()])
+
+    config = KodConfig(
+        sources=[DocumentSource(name="test-source", url="https://example.com")],
+        data_dir=tmp_path,
+        embedding_model="custom/model-384d",
+    )
+
+    run_embed(config)
+
+    sidecar = tmp_path / "embedded" / "test-source.meta.json"
+    assert sidecar.exists()
+    assert json.loads(sidecar.read_text()) == {"embedding_model": "custom/model-384d", "dim": 384}
+
+
+@patch("kod.pipeline.embed._get_embedding_model")
+def test_run_embed_interrupted_sidecar_write_leaves_no_stale_sidecar(mock_get_model, tmp_path):
+    mock_get_model.return_value = _mock_model()
+    chunked = tmp_path / "chunked"
+    chunked.mkdir()
+    _write_chunks(chunked / "test-source.jsonl", [_make_chunk()])
+    embedded = tmp_path / "embedded"
+    embedded.mkdir()
+    # A stale sidecar from a previous embed with a different model.
+    stale = embedded / "test-source.meta.json"
+    stale.write_text(json.dumps({"embedding_model": "old/model-384d", "dim": 384}))
+
+    config = KodConfig(
+        sources=[DocumentSource(name="test-source", url="https://example.com")],
+        data_dir=tmp_path,
+        embedding_model="new/model-384d",
+    )
+
+    # Simulate the process dying during the sidecar write (after the .npy is saved).
+    with patch("kod.pipeline.embed.Path.write_text", side_effect=OSError("boom")):
+        run_embed(config)
+
+    # The new vectors were written, but the interrupted write leaves NO sidecar
+    # (the stale one was removed first), so run_index rejects the source rather
+    # than trusting a sidecar that names the old model.
+    assert (embedded / "test-source.npy").exists()
+    assert not stale.exists()
+
+
+@patch("kod.pipeline.embed._get_embedding_model")
+def test_run_embed_failed_re_embed_drops_stale_outputs(mock_get_model, tmp_path):
+    mock_get_model.return_value = _mock_model()
+    chunked = tmp_path / "chunked"
+    chunked.mkdir()
+    # Regenerated chunks that fail to parse, so the re-embed raises.
+    (chunked / "test-source.jsonl").write_text("not valid json\n")
+    embedded = tmp_path / "embedded"
+    embedded.mkdir()
+    # Stale vectors + sidecar from a previous successful embed.
+    np.save(embedded / "test-source.npy", np.zeros((1, 384), dtype=np.float32))
+    (embedded / "test-source.meta.json").write_text(
+        json.dumps({"embedding_model": "old/model-384d", "dim": 384})
+    )
+
+    config = KodConfig(
+        sources=[DocumentSource(name="test-source", url="https://example.com")],
+        data_dir=tmp_path,
+    )
+
+    run_embed(config)
+
+    # Stale outputs are cleared up front, so a failed re-embed drops the source
+    # entirely instead of leaving vectors that run_index would pair with the
+    # freshly-regenerated chunks.
+    assert not (embedded / "test-source.npy").exists()
+    assert not (embedded / "test-source.meta.json").exists()
+
+
+@patch("kod.pipeline.embed._get_embedding_model")
+def test_run_embed_missing_input_drops_stale_outputs(mock_get_model, tmp_path):
+    mock_get_model.return_value = _mock_model()
+    (tmp_path / "chunked").mkdir()  # no chunked file for the source
+    embedded = tmp_path / "embedded"
+    embedded.mkdir()
+    np.save(embedded / "test-source.npy", np.zeros((1, 384), dtype=np.float32))
+    (embedded / "test-source.meta.json").write_text(
+        json.dumps({"embedding_model": "old/model-384d", "dim": 384})
+    )
+
+    config = KodConfig(
+        sources=[DocumentSource(name="test-source", url="https://example.com")],
+        data_dir=tmp_path,
+    )
+
+    run_embed(config)
+
+    assert not (embedded / "test-source.npy").exists()
+    assert not (embedded / "test-source.meta.json").exists()
 
 
 @patch("kod.pipeline.embed._get_embedding_model")

@@ -14,6 +14,10 @@ from pydantic import model_validator
 
 logger = logging.getLogger(__name__)
 
+# Default FastEmbed model, shared by the config schema and the server's model
+# resolution so the embed/index/serve steps agree on a single fallback.
+DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+
 
 class DocumentSource(BaseModel):
     """A single documentation source to extract and index."""
@@ -92,7 +96,7 @@ class KodConfig(BaseModel):
         description="Minimum characters for a chunk to be kept; shorter chunks are dropped",
     )
     embedding_model: str = Field(
-        default="BAAI/bge-small-en-v1.5",
+        default=DEFAULT_EMBEDDING_MODEL,
         description="FastEmbed model name for generating embeddings",
     )
 

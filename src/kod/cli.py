@@ -136,9 +136,11 @@ def build_image(data_dir: str, builder: str, tag: str, containerfile: str) -> No
 @click.option(
     "--model",
     envvar="KOD_EMBEDDING_MODEL",
-    default="BAAI/bge-small-en-v1.5",
-    show_default=True,
-    help="FastEmbed model name for query embedding.",
+    default=None,
+    help=(
+        "FastEmbed model name for query embedding. Defaults to the model recorded "
+        "in the index (index_meta.json), then to the built-in default."
+    ),
 )
 @click.option(
     "--rrf-k",
@@ -164,7 +166,7 @@ def build_image(data_dir: str, builder: str, tag: str, containerfile: str) -> No
     show_default=True,
     help="Maximum top_k value allowed per search request.",
 )
-def serve(data_dir: str, model: str, rrf_k: int, max_queries: int, max_top_k: int) -> None:
+def serve(data_dir: str, model: str | None, rrf_k: int, max_queries: int, max_top_k: int) -> None:
     """Start the MCP server."""
     from kod.server import run_server
 
